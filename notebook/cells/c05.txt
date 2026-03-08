@@ -1,0 +1,38 @@
+#TYPE:code
+# ==============================================================================
+# Cell 5: Reproducibility seeds + device detection + system info
+# ==============================================================================
+
+SEED = CONFIG["random_state"]
+random.seed(SEED)
+np.random.seed(SEED)
+torch.manual_seed(SEED)
+if torch.cuda.is_available():
+    torch.cuda.manual_seed_all(SEED)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+# Create output directory
+os.makedirs(CONFIG["output_dir"], exist_ok=True)
+
+# Global error accumulator
+errors_list = []
+
+# Track total runtime
+TOTAL_START_TIME = time.time()
+
+print("=" * 60)
+print("SYSTEM INFORMATION")
+print("=" * 60)
+print(f"  Python:       {os.sys.version.split()[0]}")
+print(f"  PyTorch:      {torch.__version__}")
+print(f"  CUDA:         {torch.version.cuda if torch.cuda.is_available() else 'N/A'}")
+print(f"  Device:       {CONFIG['device']}")
+if torch.cuda.is_available():
+    gpu_mem = torch.cuda.get_device_properties(0).total_mem / 1e9
+    print(f"  GPU:          {torch.cuda.get_device_name(0)}")
+    print(f"  GPU Memory:   {gpu_mem:.1f} GB")
+print(f"  Random Seed:  {SEED}")
+print(f"  Output Dir:   {CONFIG['output_dir']}")
+print("=" * 60)
+print("Reproducibility configured")

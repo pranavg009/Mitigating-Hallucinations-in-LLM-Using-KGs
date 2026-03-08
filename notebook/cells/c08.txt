@@ -1,0 +1,30 @@
+#TYPE:code
+# ==============================================================================
+# Cell 8: Test ClaimExtractor on 5 varied example sentences
+# ==============================================================================
+
+print("Initializing ClaimExtractor...")
+extractor = ClaimExtractor(method=CONFIG["extraction_method"])
+
+test_sentences = [
+    "Albert Einstein developed the theory of relativity in Germany.",
+    "The Eiffel Tower is located in Paris, France and was built in 1889.",
+    "Apple Inc. was founded by Steve Jobs in Cupertino, California.",
+    "William Shakespeare wrote Romeo and Juliet in the 16th century.",
+    "The Amazon River flows through Brazil and is the longest river in South America."
+]
+
+print("\n" + "=" * 60)
+print("CLAIM EXTRACTION TEST (5 examples)")
+print("=" * 60)
+
+for i, sent in enumerate(test_sentences, 1):
+    triples = extractor.extract_triples(sent)
+    print(f"\n[{i}] Input: \"{sent}\"")
+    print(f"    Triples extracted: {len(triples)}")
+    for j, t in enumerate(triples):
+        print(f"    {j+1}. Subject:   {t['subject']}")
+        print(f"       Predicate: {t['predicate']}")
+        print(f"       Object:    {t['object']}")
+
+print("\nClaimExtractor tested successfully")

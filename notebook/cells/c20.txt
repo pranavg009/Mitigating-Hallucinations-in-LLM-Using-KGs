@@ -1,0 +1,29 @@
+#TYPE:code
+# ==============================================================================
+# Cell 20: SelfCheckGPT — tune threshold on val, run on test, print results
+# ==============================================================================
+
+print("=" * 60)
+print("BASELINE 4: SELFCHECKGPT SIMULATION (BERTScore Consistency)")
+print("=" * 60)
+
+# Tune on validation set
+selfcheck_thresh = tune_selfcheck_threshold(val_df)
+
+# Run on test set with tuned threshold
+print(f"\nRunning SelfCheckGPT on test set (threshold={selfcheck_thresh})...")
+selfcheck_preds = selfcheck_simulation(test_df, threshold=selfcheck_thresh)
+
+sc_f1  = f1_score(y_test_true, selfcheck_preds, average="binary")
+sc_p   = precision_score(y_test_true, selfcheck_preds, zero_division=0)
+sc_r   = recall_score(y_test_true, selfcheck_preds, zero_division=0)
+sc_acc = accuracy_score(y_test_true, selfcheck_preds)
+
+print(f"\nSelfCheckGPT Simulation:")
+print(f"  Tuned threshold: {selfcheck_thresh}")
+print(f"  F1:        {sc_f1:.3f}")
+print(f"  Precision: {sc_p:.3f}")
+print(f"  Recall:    {sc_r:.3f}")
+print(f"  Accuracy:  {sc_acc:.3f}")
+
+torch.cuda.empty_cache()

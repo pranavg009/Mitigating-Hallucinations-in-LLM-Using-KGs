@@ -1,0 +1,71 @@
+#TYPE:code
+# ==============================================================================
+# Cell 4: Complete CONFIG dictionary — single source of truth for all constants
+# ==============================================================================
+
+CONFIG = {
+    # Dataset settings
+    "total_halueval_pairs":   2500,    # QA pairs to load (becomes 5000 rows after flatten)
+    "val_size":               1000,    # validation rows for threshold tuning
+    "test_size":              4000,    # test rows for all reported metrics
+    "random_state":           42,
+
+    # Model settings
+    "rebel_model_name":       "Babelscape/rebel-large",
+    "nli_model_name":         "cross-encoder/nli-deberta-v3-small",
+    "sentence_model_name":    "all-MiniLM-L6-v2",
+    "extraction_method":      "rebel",  # "rebel" or "spacy"
+    "rebel_batch_size":       16,
+    "rebel_max_input_length": 512,
+    "rebel_max_gen_length":   256,
+    "rebel_num_beams":        4,
+
+    # API settings
+    "wikidata_api":           "https://www.wikidata.org/w/api.php",
+    "sparql_endpoint":        "https://query.wikidata.org/sparql",
+    "sparql_user_agent":      "KGVerify-VITBhopal-MThesis/1.0",
+    "sparql_timeout":         15,       # seconds before SPARQL query times out
+    "api_delay":              0.5,      # seconds to sleep between Wikidata API calls
+    "sparql_delay":           0.3,      # seconds to sleep between SPARQL queries
+    "entity_search_limit":    5,        # top N Wikidata candidates per entity
+    "sparql_relations_limit": 100,      # max relations to fetch per entity
+    "api_max_retries":        3,        # retry attempts before giving up
+
+    # Verification settings
+    "confidence_threshold":   0.5,      # default; will be tuned on validation set
+    "obj_match_threshold":    0.60,     # minimum object match score for SUPPORTED
+    "confidence_weights": {
+        "el_subject":   0.25,           # entity linking confidence for subject
+        "el_object":    0.25,           # entity linking confidence for object
+        "rel_match":    0.30,           # relation matching confidence
+        "kg_coverage":  0.20            # KG coverage score
+    },                                  # weights must sum to 1.0
+
+    # KG coverage score thresholds
+    "kg_cov_high":            50,       # > 50 relations -> score 1.0
+    "kg_cov_med":             20,       # 20-50 relations -> score 0.7
+    "kg_cov_low":             1,        # 1-19 relations -> score 0.4
+                                        # 0 relations -> score 0.0
+
+    # Evaluation settings
+    "bootstrap_n":            1000,     # bootstrap samples for confidence intervals
+    "bootstrap_ci":           0.95,     # confidence level (95%)
+    "random_baseline_runs":   30,       # number of random baseline runs
+    "intermediate_save_every":200,      # save checkpoint every N samples
+
+    # Output settings
+    "output_dir":             "/kaggle/working/",
+    "device":                 "cuda" if torch.cuda.is_available() else "cpu"
+}
+
+# Validate confidence weights sum to 1.0
+w_sum = sum(CONFIG["confidence_weights"].values())
+assert abs(w_sum - 1.0) < 1e-6, f"Confidence weights must sum to 1.0, got {w_sum}"
+
+print("Configuration loaded")
+print(f"  Device:          {CONFIG['device']}")
+print(f"  Test size:       {CONFIG['test_size']} samples")
+print(f"  Validation size: {CONFIG['val_size']} samples")
+print(f"  REBEL model:     {CONFIG['rebel_model_name']}")
+print(f"  NLI model:       {CONFIG['nli_model_name']}")
+print(f"  Output dir:      {CONFIG['output_dir']}")

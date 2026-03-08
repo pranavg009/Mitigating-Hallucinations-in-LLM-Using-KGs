@@ -1,0 +1,21 @@
+#TYPE:code
+# ==============================================================================
+# Cell 2: Install all required libraries
+# ==============================================================================
+# Run this cell first — installs everything needed for the notebook
+
+!pip install -q transformers==4.40.0
+!pip install -q datasets
+!pip install -q sparqlwrapper
+!pip install -q spacy
+!pip install -q scikit-learn
+!pip install -q pandas numpy matplotlib seaborn tqdm
+!pip install -q sentencepiece accelerate
+!pip install -q bert-score
+!pip install -q statsmodels
+!pip install -q sentence-transformers
+!python -m spacy download en_core_web_sm
+
+print("\n" + "="*60)
+print("All libraries installed successfully!")
+print("="*60)

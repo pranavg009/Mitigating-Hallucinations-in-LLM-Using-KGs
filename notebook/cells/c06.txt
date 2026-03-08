@@ -1,0 +1,111 @@
+#TYPE:code
+# ==============================================================================
+# Cell 6: DataLoader — load HaluEval, flatten, domain assignment, split
+# ==============================================================================
+
+print("Loading HaluEval dataset...")
+dataset = load_dataset("pminervini/HaluEval", "qa_samples")
+
+# HaluEval may use "data" or "train" as split name
+if "data" in dataset:
+    data = dataset["data"]
+elif "train" in dataset:
+    data = dataset["train"]
+else:
+    data = dataset[list(dataset.keys())[0]]
+
+print(f"  Raw dataset size: {len(data)} QA pairs")
+
+# Take first N pairs as specified
+n_pairs = CONFIG["total_halueval_pairs"]
+subset = data.select(range(min(n_pairs, len(data))))
+print(f"  Selected {len(subset)} QA pairs")
+
+# Domain keywords for classification
+DOMAIN_KEYWORDS = {
+    "Science":    ["cell","gene","DNA","protein","atom","molecule","element",
+                   "chemical","biology","physics","chemistry","experiment","species"],
+    "History":    ["war","president","king","queen","empire","revolution",
+                   "century","ancient","battle","treaty","independence","dynasty"],
+    "Geography":  ["country","capital","continent","river","mountain","ocean",
+                   "city","located","border","territory","region","island"],
+    "People":     ["born","died","founded","invented","discovered","wrote",
+                   "directed","won","awarded","married","graduated","authored"],
+    "Technology": ["computer","internet","software","company","technology",
+                   "device","patent","digital","algorithm","startup","launched"],
+    "Culture":    ["film","movie","book","novel","painting","music","album",
+                   "song","artist","author","published","released","composed"]
+}
+
+def assign_domain(question, knowledge):
+    """Assign domain by checking keywords in question+knowledge text."""
+    text = (str(question) + " " + str(knowledge)).lower()
+    for domain, keywords in DOMAIN_KEYWORDS.items():
+        if any(kw.lower() in text for kw in keywords):
+            return domain
+    return "General"
+
+# Flatten: create two rows per QA pair (factual + hallucinated)
+rows = []
+for i, item in enumerate(tqdm(subset, desc="Flattening dataset")):
+    question = item["question"]
+    knowledge = item["knowledge"]
+    right_answer = item["right_answer"]
+    hallucinated_answer = item["hallucinated_answer"]
+    domain = assign_domain(question, knowledge)
+
+    # Factual row (label = 0)
+    rows.append({
+        "sample_id": f"F_{i}",
+        "question": question,
+        "knowledge": knowledge,
+        "answer": right_answer,
+        "true_label": 0,
+        "answer_length_words": len(str(right_answer).split()),
+        "domain": domain
+    })
+    # Hallucinated row (label = 1)
+    rows.append({
+        "sample_id": f"H_{i}",
+        "question": question,
+        "knowledge": knowledge,
+        "answer": hallucinated_answer,
+        "true_label": 1,
+        "answer_length_words": len(str(hallucinated_answer).split()),
+        "domain": domain
+    })
+
+full_df = pd.DataFrame(rows)
+print(f"\n  Full dataset: {len(full_df)} rows")
+print(f"  Class balance: {(full_df['true_label']==0).sum()} factual, "
+      f"{(full_df['true_label']==1).sum()} hallucinated")
+
+# Stratified split: val (1000) + test (4000)
+val_df, test_df = train_test_split(
+    full_df,
+    test_size=CONFIG["test_size"],
+    stratify=full_df["true_label"],
+    random_state=CONFIG["random_state"]
+)
+
+# Ensure exact sizes and reset indices
+val_df = val_df.head(CONFIG["val_size"]).reset_index(drop=True)
+test_df = test_df.head(CONFIG["test_size"]).reset_index(drop=True)
+
+print(f"\n  Validation set: {len(val_df)} rows "
+      f"({(val_df['true_label']==0).sum()} factual, "
+      f"{(val_df['true_label']==1).sum()} hallucinated)")
+print(f"  Test set:       {len(test_df)} rows "
+      f"({(test_df['true_label']==0).sum()} factual, "
+      f"{(test_df['true_label']==1).sum()} hallucinated)")
+
+# Domain distribution
+print("\n  Domain Distribution (Test Set):")
+for domain in sorted(test_df["domain"].unique()):
+    count = (test_df["domain"] == domain).sum()
+    print(f"    {domain:15s}: {count:5d} ({count/len(test_df)*100:.1f}%)")
+
+print(f"\n  Avg answer length: {test_df['answer_length_words'].mean():.1f} words")
+print(f"  Max answer length: {test_df['answer_length_words'].max()} words")
+print(f"  Min answer length: {test_df['answer_length_words'].min()} words")
+print("\nDataset loaded and split successfully")

@@ -1,0 +1,120 @@
+#TYPE:code
+# ==============================================================================
+# Cell 11: KGQueryEngine class — SPARQL queries + relation matching + helpers
+# ==============================================================================
+
+# Predicate synonym dictionary for relation matching
+PREDICATE_SYNONYMS = {
+    "founded":    ["founder","established by","created by","founded by","founding"],
+    "born":       ["birth","birthplace","born in","place of birth","birthdate"],
+    "invented":   ["inventor","created","discovered","discoverer","invention"],
+    "won":        ["award","prize","recipient","awarded","honor"],
+    "located":    ["location","place","country","city","situated","position"],
+    "wrote":      ["author","written by","creator","authored","writer"],
+    "directed":   ["director","filmmaker","directed by"],
+    "capital":    ["capital","capital city","seat of government"],
+    "married":    ["spouse","partner","married to","husband","wife"],
+    "died":       ["death","died in","place of death"],
+    "studied":    ["educated at","alma mater","university","school"],
+    "led":        ["leader","head","chief","president","CEO","chairman"],
+    "painted":    ["artist","creator","painter","painted by"],
+    "composed":   ["composer","composed by","music by"],
+    "produced":   ["producer","production","produced by","manufacturer"],
+    "built":      ["builder","architect","designed by","built by"],
+    "discovered": ["discoverer","finder","discovery","found by"]
+}
+
+
+def build_sparql_query(entity_id, limit=100):
+    """
+    Build SPARQL query string for fetching entity relations.
+    Uses str.format() to avoid f-string conflicts with SPARQL curly braces.
+    {{ and }} in the template become literal { and } after .format().
+    """
+    template = """
+    SELECT ?property ?propertyLabel ?value ?valueLabel WHERE {{
+      wd:{eid} ?prop ?value .
+      ?property wikibase:directClaim ?prop .
+      FILTER(!isBlank(?value))
+      SERVICE wikibase:label {{ bd:serviceParam wikibase:language "en". }}
+    }} LIMIT {lim}
+    """
+    return template.format(eid=entity_id, lim=limit)
+
+
+def compute_object_match_score(extracted_object, kg_value_label):
+    """Score how well extracted_object matches a KG value label."""
+    if not extracted_object or not kg_value_label:
+        return 0.0
+    a = extracted_object.lower().strip()
+    b = kg_value_label.lower().strip()
+    if a == b:
+        return 1.0                           # exact match
+    if a in b or b in a:
+        return 0.8                           # substring match
+    words_a = set(a.split())
+    words_b = set(b.split())
+    if words_a and words_b:
+        overlap = len(words_a & words_b) / len(words_a | words_b)
+        if overlap > 0.5:
+            return 0.6                       # word overlap > 50%
+    return 0.0
+
+
+class KGQueryEngine:
+    """Query Wikidata SPARQL endpoint for entity relations."""
+
+    def __init__(self):
+        self.cache = {}
+        self.sparql_calls = 0
+
+    def get_relations(self, entity_id):
+        """
+        Fetch all direct relations for a Wikidata entity.
+        Returns list of dicts: [{"property_id","property_label","value_id","value_label"}]
+        Returns empty list on any error.
+        """
+        if not entity_id:
+            return []
+
+        if entity_id in self.cache:
+            return self.cache[entity_id]
+
+        relations = self._query_sparql(entity_id)
+        self.cache[entity_id] = relations
+        return relations
+
+    def _query_sparql(self, entity_id):
+        """Execute SPARQL query against Wikidata endpoint."""
+        try:
+            time.sleep(CONFIG["sparql_delay"])
+            self.sparql_calls += 1
+            sparql = SPARQLWrapper(CONFIG["sparql_endpoint"])
+            sparql.addParameter("User-Agent", CONFIG["sparql_user_agent"])
+            sparql.setTimeout(CONFIG["sparql_timeout"])
+            sparql.setReturnFormat(JSON)
+            sparql.setQuery(build_sparql_query(
+                entity_id, CONFIG["sparql_relations_limit"]))
+            results = sparql.query().convert()
+            relations = []
+            for r in results["results"]["bindings"]:
+                relations.append({
+                    "property_id":    r.get("property",      {}).get("value", ""),
+                    "property_label": r.get("propertyLabel", {}).get("value", ""),
+                    "value_id":       r.get("value",         {}).get("value", ""),
+                    "value_label":    r.get("valueLabel",    {}).get("value", "")
+                })
+            return relations
+        except Exception as e:
+            errors_list.append({
+                "stage": "sparql_query",
+                "entity_id": entity_id,
+                "error": str(e)
+            })
+            return []
+
+
+print("KGQueryEngine class defined")
+print("PREDICATE_SYNONYMS defined ({} predicates)".format(len(PREDICATE_SYNONYMS)))
+print("build_sparql_query() defined")
+print("compute_object_match_score() defined")

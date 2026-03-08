@@ -1,0 +1,45 @@
+#TYPE:code
+# ==============================================================================
+# Cell 29: Domain-stratified performance analysis
+# ==============================================================================
+
+print("=" * 60)
+print("DOMAIN-STRATIFIED PERFORMANCE")
+print("=" * 60)
+
+domain_results = {}
+all_domains = sorted(results_df["domain"].unique())
+
+for domain in all_domains:
+    mask = results_df["domain"] == domain
+    n = int(mask.sum())
+    if n < 10:
+        continue
+    y_t = results_df.loc[mask, "true_label"].values
+    y_p = results_df.loc[mask, "predicted_label"].values
+    domain_results[domain] = {
+        "n_samples":  n,
+        "f1":         f1_score(y_t, y_p, average="binary"),
+        "precision":  precision_score(y_t, y_p, zero_division=0),
+        "recall":     recall_score(y_t, y_p, zero_division=0),
+        "accuracy":   accuracy_score(y_t, y_p)
+    }
+
+# Overall
+domain_results["Overall"] = {
+    "n_samples":  len(results_df),
+    "f1":         kg_f1,
+    "precision":  kg_p,
+    "recall":     kg_r,
+    "accuracy":   kg_acc
+}
+
+print(f"\n{'Domain':<15s} {'Samples':>8s} {'Precision':>10s} "
+      f"{'Recall':>8s} {'F1':>8s} {'Accuracy':>10s}")
+print("-" * 65)
+for domain in all_domains + ["Overall"]:
+    if domain in domain_results:
+        d = domain_results[domain]
+        marker = " <--" if domain == "Overall" else ""
+        print(f"{domain:<15s} {d['n_samples']:>8d} {d['precision']:>10.3f} "
+              f"{d['recall']:>8.3f} {d['f1']:>8.3f} {d['accuracy']:>10.3f}{marker}")

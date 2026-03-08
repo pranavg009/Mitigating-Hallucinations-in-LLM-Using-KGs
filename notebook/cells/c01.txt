@@ -1,0 +1,58 @@
+#TYPE:markdown
+# Mitigating Hallucinations in Large Language Models Using Knowledge Graphs
+
+## KG-Verify V4 — Complete Evaluation Notebook
+
+**Research Problem:** Large Language Models (LLMs) generate hallucinations — factually incorrect statements expressed with high confidence. These are dangerous because they are embedded inside otherwise correct responses, expressed fluently so users cannot spot them, and scale with LLM deployment.
+
+**Proposed Solution: KG-Verify** — A post-generation verification pipeline using structured Knowledge Graphs (Wikidata).
+- Works AFTER the LLM generates any text
+- Works with ANY LLM (no model access required)
+- Catches what RAG misses
+- Corrects what detection-only systems cannot fix
+
+**Novel Contribution: RAG + KG-Verify Combined Architecture**
+- RAG reduces hallucinations at generation time (preventive layer)
+- KG-Verify catches remaining hallucinations post-generation (detective + corrective layer)
+- Combined estimated reduction: 45-65% vs bare LLM
+- This combined experiment is a unique thesis contribution not present in existing literature
+
+### Pipeline Architecture
+```
+INPUT: Any LLM-generated text
+  -> STAGE 1: Claim Extraction (REBEL model -> Subject-Predicate-Object triples)
+  -> STAGE 2: Entity Linking (Wikidata Search API -> Wikidata Q-numbers)
+  -> STAGE 3: KG Query (Wikidata SPARQL -> ground truth facts)
+  -> STAGE 4: Verification (confidence formula -> SUPPORTED/CONTRADICTED/UNVERIFIABLE)
+  -> STAGE 5: Span Identification (which exact text phrases are hallucinated)
+  -> STAGE 6: Correction (replace hallucinated spans with KG-verified facts)
+OUTPUT: Verdict + Confidence Score + Corrected Text + KG Evidence Trail
+```
+
+### How to Run
+1. Upload this notebook to **Kaggle**
+2. Enable **GPU (T4)** in Settings -> Accelerator
+3. Enable **Internet** in Settings -> Internet
+4. Click **"Run All"** — executes top-to-bottom without any human intervention
+5. All outputs (6 plots, 9 tables, results CSV) are auto-generated in `/kaggle/working/`
+
+### Dataset
+- **HaluEval QA** (`pminervini/HaluEval`, `qa_samples`)
+- 2500 QA pairs -> 5000 rows (balanced: 2500 factual + 2500 hallucinated)
+- Test set: 4000 samples | Validation set: 1000 samples
+
+### Baselines (6)
+Random (30-run) | Majority Class | NLI (DeBERTa) | SelfCheckGPT | FactAlign | RAG
+
+### Output Files
+| File | Description |
+|------|-------------|
+| `results_test.csv` | Full test results with all columns |
+| `evaluation_main.png` | Main evaluation figure (2x3 grid) |
+| `calibration_curve.png` | Reliability diagram + confidence histogram |
+| `ablation_study.png` | Component ablation analysis |
+| `threshold_tuning.png` | Threshold selection curve |
+| `rag_comparison.png` | RAG vs KG-Verify vs Combined |
+| `random_baseline_distribution.png` | Random baseline distribution |
+| `thesis_tables.txt` | All 9 thesis tables formatted |
+| `errors_log.txt` | Complete error log |

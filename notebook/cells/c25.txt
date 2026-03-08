@@ -1,0 +1,64 @@
+#TYPE:code
+# ==============================================================================
+# Cell 25: Bootstrap confidence intervals for all 8 systems
+# ==============================================================================
+
+print("=" * 60)
+print("BOOTSTRAP CONFIDENCE INTERVALS (1000 samples, 95% CI)")
+print("=" * 60)
+
+def bootstrap_ci(y_true, y_pred, metric_fn, n_bootstrap=None, ci=None):
+    """Compute bootstrap confidence intervals for a metric."""
+    n_bootstrap = n_bootstrap or CONFIG["bootstrap_n"]
+    ci          = ci          or CONFIG["bootstrap_ci"]
+    np.random.seed(CONFIG["random_state"])
+    n, scores = len(y_true), []
+    for _ in range(n_bootstrap):
+        idx = np.random.choice(n, size=n, replace=True)
+        try:
+            scores.append(metric_fn(y_true[idx], y_pred[idx]))
+        except Exception:
+            continue
+    alpha = (1 - ci) / 2
+    return (np.percentile(scores, alpha * 100),
+            np.percentile(scores, (1 - alpha) * 100),
+            np.mean(scores))
+
+# Collect all systems for bootstrap
+seq_preds = combined_results["Sequential (RAG->KG)"]["predictions"]
+
+all_systems = {
+    "Random":            random_preds_mean,
+    "Majority":          majority_preds,
+    "NLI (DeBERTa)":     nli_preds,
+    "SelfCheckGPT":      selfcheck_preds,
+    "FactAlign":         factalign_preds,
+    "RAG":               rag_preds,
+    "KG-Verify (Ours)":  kg_preds,
+    "Combined-Sequential": seq_preds,
+}
+
+# Compute bootstrap CIs for F1
+all_bootstrap_cis = {}
+for name, preds in all_systems.items():
+    metric_fn = lambda yt, yp: f1_score(yt, yp, average="binary")
+    lower, upper, mean = bootstrap_ci(y_test_true, preds, metric_fn)
+    all_bootstrap_cis[name] = {
+        "f1_mean":  mean,
+        "f1_lower": lower,
+        "f1_upper": upper
+    }
+    print(f"  {name:25s}: F1 = {mean:.3f} (95% CI: [{lower:.3f}, {upper:.3f}])")
+
+# Also compute Precision and Recall CIs for KG-Verify
+for metric_name, metric_fn in [
+    ("Precision", lambda yt, yp: precision_score(yt, yp, zero_division=0)),
+    ("Recall",    lambda yt, yp: recall_score(yt, yp, zero_division=0)),
+    ("Accuracy",  lambda yt, yp: accuracy_score(yt, yp)),
+]:
+    lower, upper, mean = bootstrap_ci(y_test_true, kg_preds, metric_fn)
+    all_bootstrap_cis[f"KG-Verify_{metric_name}"] = {
+        "mean": mean, "lower": lower, "upper": upper
+    }
+    print(f"  KG-Verify {metric_name:10s}: {mean:.3f} "
+          f"(95% CI: [{lower:.3f}, {upper:.3f}])")

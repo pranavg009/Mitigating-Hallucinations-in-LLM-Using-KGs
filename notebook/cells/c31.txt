@@ -1,0 +1,67 @@
+#TYPE:code
+# ==============================================================================
+# Cell 31: Confidence calibration — reliability diagram + ECE score
+# ==============================================================================
+
+print("=" * 60)
+print("CONFIDENCE CALIBRATION ANALYSIS")
+print("=" * 60)
+
+def compute_calibration_data(y_true, confidence_scores, n_bins=10):
+    """Compute calibration data for reliability diagram."""
+    bins = np.linspace(0, 1, n_bins + 1)
+    bin_accs, bin_confs, bin_sizes = [], [], []
+    for i in range(n_bins):
+        mask = ((confidence_scores >= bins[i]) &
+                (confidence_scores <  bins[i + 1]))
+        if mask.sum() > 0:
+            bin_accs.append(float(y_true[mask].mean()))
+            bin_confs.append(float(confidence_scores[mask].mean()))
+            bin_sizes.append(int(mask.sum()))
+        else:
+            bin_accs.append(0.0)
+            bin_confs.append((bins[i] + bins[i+1]) / 2)
+            bin_sizes.append(0)
+
+    total = sum(bin_sizes)
+    ece = sum(abs(a - c) * s
+              for a, c, s in zip(bin_accs, bin_confs, bin_sizes)) / total if total > 0 else 0.0
+
+    return bin_accs, bin_confs, bin_sizes, float(ece)
+
+# Get confidence scores and true labels
+confidence_scores = results_df["overall_confidence"].values
+
+# For calibration, we need P(hallucinated | confidence)
+# Higher confidence in our system means more evidence was found
+# For hallucinated samples (true_label=1), we want high confidence when
+# the system correctly identifies them
+calibration_true = results_df["true_label"].values
+calibration_scores = np.where(
+    results_df["predicted_label"].values == 1,
+    confidence_scores,
+    1 - confidence_scores
+)
+
+bin_accs, bin_confs, bin_sizes, ece_value = compute_calibration_data(
+    calibration_true, calibration_scores)
+
+# Also compute correct vs incorrect confidence stats
+correct_mask = (results_df["predicted_label"].values == results_df["true_label"].values)
+avg_conf_correct = confidence_scores[correct_mask].mean() if correct_mask.sum() > 0 else 0
+avg_conf_wrong   = confidence_scores[~correct_mask].mean() if (~correct_mask).sum() > 0 else 0
+
+print(f"\n  ECE (Expected Calibration Error): {ece_value:.4f}")
+print(f"  Avg Confidence (Correct predictions):   {avg_conf_correct:.3f}")
+print(f"  Avg Confidence (Incorrect predictions): {avg_conf_wrong:.3f}")
+print(f"  Confidence gap: {abs(avg_conf_correct - avg_conf_wrong):.3f}")
+
+# Store calibration data for plotting in Cell 33
+calibration_data = {
+    "bin_accs": bin_accs,
+    "bin_confs": bin_confs,
+    "bin_sizes": bin_sizes,
+    "ece": ece_value,
+    "confidence_scores": confidence_scores,
+    "calibration_scores": calibration_scores
+}

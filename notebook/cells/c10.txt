@@ -1,0 +1,31 @@
+#TYPE:code
+# ==============================================================================
+# Cell 10: Test EntityLinker on 5 entity names
+# ==============================================================================
+
+print("Initializing EntityLinker...")
+linker = EntityLinker()
+
+test_entities = [
+    "Albert Einstein",
+    "Eiffel Tower",
+    "Apple Inc.",
+    "Amazon River",
+    "William Shakespeare"
+]
+
+print("\n" + "=" * 60)
+print("ENTITY LINKING TEST (5 entities)")
+print("=" * 60)
+
+for entity in test_entities:
+    result = linker.search_entity(entity)
+    print(f"\n  Entity: \"{entity}\"")
+    print(f"    Q-number:    {result['entity_id']}")
+    print(f"    Label:       {result['label']}")
+    print(f"    Description: {result['description']}")
+    print(f"    Confidence:  {result['confidence']}")
+
+print(f"\n  Total API calls: {linker.api_calls}")
+print(f"  Cache entries:   {len(linker.cache)}")
+print("EntityLinker tested successfully")

@@ -1,0 +1,44 @@
+#TYPE:code
+# ==============================================================================
+# Cell 26: McNemar's statistical significance tests for all pairs
+# ==============================================================================
+
+print("=" * 60)
+print("McNEMAR'S STATISTICAL SIGNIFICANCE TESTS")
+print("=" * 60)
+
+def run_mcnemar_test(y_true, preds_a, preds_b, name_a, name_b):
+    """Run McNemar's test between two systems."""
+    n00 = int(((preds_a == y_true) & (preds_b == y_true)).sum())
+    n01 = int(((preds_a == y_true) & (preds_b != y_true)).sum())
+    n10 = int(((preds_a != y_true) & (preds_b == y_true)).sum())
+    n11 = int(((preds_a != y_true) & (preds_b != y_true)).sum())
+    table  = [[n00, n01], [n10, n11]]
+    result = mcnemar(table, exact=(n01 + n10 < 25))
+    sig    = "YES" if result.pvalue < 0.05 else "NO"
+    print(f"  {name_a} vs {name_b}: "
+          f"statistic={result.statistic:.2f}, "
+          f"p={result.pvalue:.4f} -- Significant: {sig}")
+    return result.pvalue
+
+# KG-Verify vs all 6 baselines
+mcnemar_results = {}
+
+comparisons = [
+    ("KG-Verify", kg_preds, "Random",       random_preds_mean),
+    ("KG-Verify", kg_preds, "Majority",     majority_preds),
+    ("KG-Verify", kg_preds, "NLI",          nli_preds),
+    ("KG-Verify", kg_preds, "SelfCheckGPT", selfcheck_preds),
+    ("KG-Verify", kg_preds, "FactAlign",    factalign_preds),
+    ("KG-Verify", kg_preds, "RAG",          rag_preds),
+    ("Combined-Seq", seq_preds, "KG-Verify", kg_preds),
+    ("Combined-Seq", seq_preds, "RAG",       rag_preds),
+]
+
+for name_a, preds_a, name_b, preds_b in comparisons:
+    try:
+        pval = run_mcnemar_test(y_test_true, preds_a, preds_b, name_a, name_b)
+        mcnemar_results[f"{name_a} vs {name_b}"] = pval
+    except Exception as e:
+        print(f"  {name_a} vs {name_b}: Error - {str(e)}")
+        mcnemar_results[f"{name_a} vs {name_b}"] = 1.0

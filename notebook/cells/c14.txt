@@ -1,0 +1,52 @@
+#TYPE:code
+# ==============================================================================
+# Cell 14: Test full pipeline on 10 example sentences (5 factual, 5 hallucinated)
+# ==============================================================================
+
+test_texts = [
+    # 5 Factual statements
+    "Albert Einstein was born in Ulm, Germany in 1879.",
+    "The Eiffel Tower is located in Paris, France.",
+    "Python programming language was created by Guido van Rossum.",
+    "The Amazon River is the longest river in South America.",
+    "William Shakespeare wrote Hamlet.",
+    # 5 Hallucinated statements
+    "Albert Einstein was born in London, England in 1920.",
+    "The Eiffel Tower is located in Berlin, Germany.",
+    "Python programming language was created by Bill Gates.",
+    "The Amazon River is the longest river in Africa.",
+    "William Shakespeare wrote The Great Gatsby.",
+]
+expected_labels = [0, 0, 0, 0, 0, 1, 1, 1, 1, 1]
+
+print("=" * 70)
+print("FULL PIPELINE TEST (10 examples: 5 factual + 5 hallucinated)")
+print("=" * 70)
+
+correct = 0
+for i, (text, label) in enumerate(zip(test_texts, expected_labels)):
+    result = verify_single_response(text, extractor, linker, kg_engine)
+
+    is_correct = result["predicted_label"] == label
+    correct += int(is_correct)
+    status_str = "CORRECT" if is_correct else "WRONG"
+
+    print(f"\n[{i+1}] {status_str}")
+    print(f"    Text:       \"{text}\"")
+    print(f"    Expected:   {'HALLUCINATED' if label == 1 else 'FACTUAL'}")
+    print(f"    Predicted:  {result['overall_verdict']} (label={result['predicted_label']})")
+    print(f"    Confidence: {result['overall_confidence']:.3f}")
+    print(f"    Triples:    {result['triples_extracted']}")
+    print(f"    Time:       {result['processing_time_sec']:.2f}s")
+    if result["claim_results"]:
+        for j, cr in enumerate(result["claim_results"]):
+            print(f"    Claim {j+1}: {cr['subject']} -> {cr['predicate']} -> {cr['object']}")
+            print(f"             Status: {cr['status']}")
+            print(f"             Evidence: {cr['evidence'][:120]}")
+            if cr["kg_says"]:
+                print(f"             KG says: {cr['kg_says']}")
+
+print(f"\n{'=' * 70}")
+print(f"Pipeline Test Accuracy: {correct}/{len(test_texts)} "
+      f"= {correct/len(test_texts)*100:.0f}%")
+print(f"{'=' * 70}")

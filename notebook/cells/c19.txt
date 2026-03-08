@@ -1,0 +1,21 @@
+#TYPE:code
+# ==============================================================================
+# Cell 19: NLI baseline — load DeBERTa, run on test set, clear GPU
+# ==============================================================================
+
+print("=" * 60)
+print("BASELINE 3: NLI BASELINE (DeBERTa)")
+print("=" * 60)
+
+nli_preds = nli_baseline(test_df, CONFIG["device"])
+
+nli_f1  = f1_score(y_test_true, nli_preds, average="binary")
+nli_p   = precision_score(y_test_true, nli_preds, zero_division=0)
+nli_r   = recall_score(y_test_true, nli_preds, zero_division=0)
+nli_acc = accuracy_score(y_test_true, nli_preds)
+
+print(f"\nNLI Baseline (DeBERTa v3 small):")
+print(f"  F1:        {nli_f1:.3f}")
+print(f"  Precision: {nli_p:.3f}")
+print(f"  Recall:    {nli_r:.3f}")
+print(f"  Accuracy:  {nli_acc:.3f}")

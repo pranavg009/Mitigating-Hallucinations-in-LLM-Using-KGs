@@ -1,0 +1,80 @@
+#TYPE:code
+# ==============================================================================
+# Cell 32: CorrectionEngine class + 10 correction demonstrations
+# ==============================================================================
+
+class CorrectionEngine:
+    """Replace hallucinated spans with KG-verified facts."""
+
+    def correct_response(self, original_text, claim_results):
+        """
+        For each CONTRADICTED claim, replace the hallucinated object with
+        the KG-verified value stored in claim["kg_says"].
+        """
+        corrected = original_text
+        corrections_made = []
+
+        for claim in claim_results:
+            if claim["status"] == "CONTRADICTED":
+                wrong_value   = claim.get("object", "").strip()
+                correct_value = claim.get("kg_says", "").strip()
+
+                if correct_value and wrong_value and len(wrong_value) > 1:
+                    pattern = re.compile(re.escape(wrong_value), re.IGNORECASE)
+                    new_text = pattern.sub(correct_value, corrected, count=1)
+                    if new_text != corrected:
+                        corrected = new_text
+                        corrections_made.append({
+                            "original":  wrong_value,
+                            "corrected": correct_value,
+                            "source":    "Wikidata",
+                            "property":  claim.get("matched_property", ""),
+                            "evidence":  claim.get("evidence", "")
+                        })
+
+        return {
+            "original_text":       original_text,
+            "corrected_text":      corrected,
+            "corrections_applied": len(corrections_made),
+            "corrections_detail":  corrections_made,
+            "text_changed":        corrected != original_text
+        }
+
+
+# Demonstrate correction on 10 examples
+correction_engine = CorrectionEngine()
+
+print("=" * 60)
+print("CORRECTION ENGINE DEMONSTRATIONS (10 examples)")
+print("=" * 60)
+
+# Find test samples where true_label=1 and predicted_label=1 (correct detections)
+correct_detections = results_df[
+    (results_df["true_label"] == 1) &
+    (results_df["predicted_label"] == 1)
+].head(10)
+
+correction_demos = []
+for demo_i, (idx, row) in enumerate(correct_detections.iterrows()):
+    claim_results_for_sample = all_claim_results[idx] if idx < len(all_claim_results) else []
+
+    correction = correction_engine.correct_response(
+        row["answer"], claim_results_for_sample)
+    correction_demos.append(correction)
+
+    print(f"\n--- Example {demo_i + 1} ---")
+    print(f"  HALLUCINATED TEXT: \"{row['answer'][:150]}\"")
+    print(f"  CORRECTED TEXT:    \"{correction['corrected_text'][:150]}\"")
+    if correction["corrections_detail"]:
+        for c in correction["corrections_detail"]:
+            print(f"  CHANGE: '{c['original']}' -> '{c['corrected']}' "
+                  f"[Wikidata: {c['property']}]")
+    else:
+        print(f"  (No span-level correction available - KG evidence insufficient)")
+    conf = results_df.loc[idx, "overall_confidence"] if idx < len(results_df) else 0
+    print(f"  CONFIDENCE: {conf:.3f}")
+
+corrections_made_count = sum(1 for c in correction_demos if c["text_changed"])
+print(f"\n{'=' * 60}")
+print(f"Corrections applied: {corrections_made_count}/{len(correction_demos)} examples")
+print(f"{'=' * 60}")

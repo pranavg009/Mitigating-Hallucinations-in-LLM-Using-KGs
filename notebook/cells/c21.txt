@@ -1,0 +1,30 @@
+#TYPE:code
+# ==============================================================================
+# Cell 21: FactAlign — tune threshold on val, run on test, print results
+# ==============================================================================
+
+print("=" * 60)
+print("BASELINE 5: FACTALIGN SIMULATION (Triple Jaccard)")
+print("=" * 60)
+
+# Tune on validation set
+print("Tuning FactAlign threshold on validation set...")
+factalign_thresh = tune_factalign_threshold(val_df, extractor)
+
+# Run on test set with tuned threshold
+print(f"\nRunning FactAlign on test set (threshold={factalign_thresh})...")
+factalign_preds = factalign_simulation(test_df, extractor, threshold=factalign_thresh)
+
+fa_f1  = f1_score(y_test_true, factalign_preds, average="binary")
+fa_p   = precision_score(y_test_true, factalign_preds, zero_division=0)
+fa_r   = recall_score(y_test_true, factalign_preds, zero_division=0)
+fa_acc = accuracy_score(y_test_true, factalign_preds)
+
+print(f"\nFactAlign Simulation:")
+print(f"  Tuned threshold: {factalign_thresh}")
+print(f"  F1:        {fa_f1:.3f}")
+print(f"  Precision: {fa_p:.3f}")
+print(f"  Recall:    {fa_r:.3f}")
+print(f"  Accuracy:  {fa_acc:.3f}")
+
+torch.cuda.empty_cache()

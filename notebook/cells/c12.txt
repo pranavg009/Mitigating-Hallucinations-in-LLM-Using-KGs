@@ -1,0 +1,43 @@
+#TYPE:code
+# ==============================================================================
+# Cell 12: Test KGQueryEngine on 3 subject-predicate-object examples
+# ==============================================================================
+
+print("Initializing KGQueryEngine...")
+kg_engine = KGQueryEngine()
+
+test_cases = [
+    {"subject": "Albert Einstein", "predicate": "born", "object": "Germany"},
+    {"subject": "Eiffel Tower", "predicate": "located", "object": "Paris"},
+    {"subject": "Apple Inc.", "predicate": "founded", "object": "Steve Jobs"}
+]
+
+print("\n" + "=" * 60)
+print("KG QUERY ENGINE TEST (3 examples)")
+print("=" * 60)
+
+for tc in test_cases:
+    print(f"\n  Triple: {tc['subject']} -> {tc['predicate']} -> {tc['object']}")
+
+    # Link subject entity
+    subj_link = linker.search_entity(tc["subject"])
+    if subj_link["entity_id"]:
+        relations = kg_engine.get_relations(subj_link["entity_id"])
+        print(f"    Entity ID:      {subj_link['entity_id']}")
+        print(f"    Relations found: {len(relations)}")
+
+        # Show first 5 relations
+        for r in relations[:5]:
+            print(f"      {r['property_label']}: {r['value_label']}")
+
+        # Test object matching against first relation
+        if relations:
+            score = compute_object_match_score(
+                tc["object"], relations[0]["value_label"])
+            print(f"    Object match (vs first rel): {score:.2f}")
+    else:
+        print(f"    Entity not found in Wikidata")
+
+print(f"\n  SPARQL calls made: {kg_engine.sparql_calls}")
+print(f"  Cache entries:     {len(kg_engine.cache)}")
+print("KGQueryEngine tested successfully")

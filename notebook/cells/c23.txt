@@ -1,0 +1,119 @@
+#TYPE:code
+# ==============================================================================
+# Cell 23: Run KG-Verify on full 4000-sample test set
+# ==============================================================================
+
+print("=" * 60)
+print("MAIN EVALUATION: KG-VERIFY ON 4000 TEST SAMPLES")
+print("=" * 60)
+print(f"Confidence threshold: {CONFIG['confidence_threshold']}")
+print(f"This will take 30-60 minutes due to API rate limiting...")
+print(f"Intermediate saves every {CONFIG['intermediate_save_every']} samples")
+
+results_list = []
+eval_start = time.time()
+
+for i, row in tqdm(test_df.iterrows(), total=len(test_df),
+                   desc="KG-Verify Evaluation"):
+    try:
+        result = verify_single_response(
+            str(row["answer"]), extractor, linker, kg_engine)
+        # Apply tuned threshold
+        result["predicted_label"] = predict_with_threshold(
+            result, CONFIG["confidence_threshold"])
+        results_list.append(result)
+    except Exception as e:
+        errors_list.append({
+            "sample": i, "error": str(e), "stage": "main_evaluation"
+        })
+        empty = _empty_result(str(row["answer"]), str(e))
+        results_list.append(empty)
+
+    # Print running F1 every 200 samples
+    if (i + 1) % CONFIG["intermediate_save_every"] == 0:
+        current_preds = np.array([r["predicted_label"] for r in results_list])
+        current_true = test_df["true_label"].values[:len(results_list)]
+        running_f1 = f1_score(current_true, current_preds, average="binary")
+        elapsed = time.time() - eval_start
+        rate = elapsed / len(results_list)
+        eta = rate * (len(test_df) - len(results_list)) / 60
+        print(f"  [{len(results_list)}/{len(test_df)}] "
+              f"Running F1: {running_f1:.3f} | "
+              f"ETA: {eta:.1f} min")
+
+        # Save intermediate checkpoint
+        batch_num = len(results_list) // CONFIG["intermediate_save_every"]
+        try:
+            intermediate_rows = []
+            for j, r in enumerate(results_list):
+                intermediate_rows.append({
+                    "sample_id": test_df.iloc[j]["sample_id"],
+                    "predicted_label": r["predicted_label"],
+                    "overall_verdict": r["overall_verdict"],
+                    "overall_confidence": r["overall_confidence"],
+                    "triples_extracted": r["triples_extracted"],
+                })
+            pd.DataFrame(intermediate_rows).to_csv(
+                CONFIG["output_dir"] + "intermediate_{}.csv".format(batch_num),
+                index=False)
+        except Exception:
+            pass
+
+eval_elapsed = time.time() - eval_start
+print(f"\nEvaluation complete!")
+print(f"  Total time: {eval_elapsed/60:.1f} minutes")
+print(f"  Avg time per sample: {eval_elapsed/len(test_df):.2f}s")
+print(f"  Errors encountered: {len([e for e in errors_list if e.get('stage')=='main_evaluation'])}")
+
+# Build results DataFrame with ALL required columns
+results_rows = []
+for i, (result, (_, row)) in enumerate(
+        zip(results_list, test_df.iterrows())):
+    hallucinated_spans = result.get("hallucinated_spans", [])
+    results_rows.append({
+        "sample_id":           row["sample_id"],
+        "question":            row["question"],
+        "answer":              row["answer"],
+        "true_label":          row["true_label"],
+        "predicted_label":     result["predicted_label"],
+        "overall_verdict":     result["overall_verdict"],
+        "overall_confidence":  result["overall_confidence"],
+        "triples_extracted":   result["triples_extracted"],
+        "subject_id":          result.get("subject_id"),
+        "object_id":           result.get("object_id"),
+        "property_matched":    result.get("property_matched", False),
+        "n_supported":         result.get("n_supported", 0),
+        "n_contradicted":      result.get("n_contradicted", 0),
+        "n_unverifiable":      result.get("n_unverifiable", 0),
+        "hallucinated_spans":  json.dumps(hallucinated_spans),
+        "processing_time_sec": result.get("processing_time_sec", 0.0),
+        "domain":              row["domain"],
+        "answer_length_words": row["answer_length_words"],
+    })
+
+results_df = pd.DataFrame(results_rows)
+
+# Save results CSV
+results_df.to_csv(CONFIG["output_dir"] + "results_test.csv", index=False)
+print(f"\nResults saved to {CONFIG['output_dir']}results_test.csv")
+
+# KG-Verify predictions array
+kg_preds = results_df["predicted_label"].values
+
+# Print main metrics
+kg_f1  = f1_score(y_test_true, kg_preds, average="binary")
+kg_p   = precision_score(y_test_true, kg_preds, zero_division=0)
+kg_r   = recall_score(y_test_true, kg_preds, zero_division=0)
+kg_acc = accuracy_score(y_test_true, kg_preds)
+
+print(f"\n{'=' * 60}")
+print(f"KG-VERIFY RESULTS (n={len(test_df)})")
+print(f"{'=' * 60}")
+print(f"  Accuracy:  {kg_acc:.3f} ({kg_acc*100:.1f}%)")
+print(f"  Precision: {kg_p:.3f}")
+print(f"  Recall:    {kg_r:.3f}")
+print(f"  F1-Score:  {kg_f1:.3f}")
+print(f"{'=' * 60}")
+
+# Store claim results for correction engine (Cell 32)
+all_claim_results = [r.get("claim_results", []) for r in results_list]

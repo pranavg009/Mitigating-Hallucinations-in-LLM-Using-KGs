@@ -1,0 +1,19 @@
+#TYPE:code
+# ==============================================================================
+# Cell 18: Majority class baseline — run and print results
+# ==============================================================================
+
+print("=" * 60)
+print("BASELINE 2: MAJORITY CLASS BASELINE")
+print("=" * 60)
+
+majority_results = majority_class_baseline(y_test_true)
+
+print(f"\nMajority Class (always predict HALLUCINATED):")
+print(f"  F1:        {majority_results['f1']:.3f}")
+print(f"  Precision: {majority_results['precision']:.3f}")
+print(f"  Recall:    {majority_results['recall']:.3f}")
+print(f"  Accuracy:  {majority_results['accuracy']:.3f}")
+print(f"\nAny meaningful system must exceed F1 = {majority_results['f1']:.3f}")
+
+majority_preds = majority_results["predictions"]

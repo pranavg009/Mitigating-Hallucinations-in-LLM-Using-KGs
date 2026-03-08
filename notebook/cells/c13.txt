@@ -1,0 +1,213 @@
+#TYPE:code
+# ==============================================================================
+# Cell 13: VerificationEngine — verify_single_triple + verify_single_response
+#           + _aggregate_verdicts + _empty_result + confidence scoring
+# ==============================================================================
+
+def compute_confidence(c_el_subj, c_el_obj, c_rm, c_kg):
+    """
+    S_claim = (0.25 x C_EL_subj) + (0.25 x C_EL_obj) + (0.30 x C_RM) + (0.20 x C_KG)
+    """
+    w = CONFIG["confidence_weights"]
+    return (w["el_subject"] * c_el_subj +
+            w["el_object"]  * c_el_obj  +
+            w["rel_match"]  * c_rm      +
+            w["kg_coverage"] * c_kg)
+
+
+def compute_kg_coverage_score(num_relations):
+    """KG coverage score based on number of relations."""
+    if   num_relations > CONFIG["kg_cov_high"]:  return 1.0
+    elif num_relations >= CONFIG["kg_cov_med"]:   return 0.7
+    elif num_relations >= CONFIG["kg_cov_low"]:   return 0.4
+    else:                                          return 0.0
+
+
+def verify_single_triple(triple_dict, subject_link, object_link, relations):
+    """
+    Verify one triple against Wikidata evidence.
+    Returns dict with ALL fields needed by downstream cells.
+    """
+    subj_id   = subject_link.get("entity_id")
+    obj_id    = object_link.get("entity_id")
+    c_el_subj = subject_link.get("confidence", 0.0)
+    c_el_obj  = object_link.get("confidence",  0.0)
+    predicate = triple_dict.get("predicate", "").lower()
+    obj_text  = triple_dict.get("object", "")
+
+    # Base result structure with ALL fields used by later cells
+    result = {
+        "subject":            triple_dict.get("subject", ""),
+        "predicate":          predicate,
+        "object":             obj_text,
+        "subject_id":         subj_id,
+        "object_id":          obj_id,
+        "status":             "UNVERIFIABLE",
+        "confidence":         0.0,
+        "evidence":           "",
+        "kg_says":            "",
+        "matched_property":   "",
+        "property_matched":   False,
+        "object_match_score": 0.0
+    }
+
+    if not subj_id and not obj_id:
+        result["evidence"] = "Neither entity found in Wikidata"
+        result["confidence"] = compute_confidence(0.0, 0.0, 0.0, 0.0)
+        return result
+
+    if not relations:
+        result["evidence"] = "Entity found but no relations retrieved from KG"
+        c_kg = compute_kg_coverage_score(0)
+        result["confidence"] = compute_confidence(c_el_subj, c_el_obj, 0.0, c_kg)
+        return result
+
+    c_kg = compute_kg_coverage_score(len(relations))
+
+    # Find best matching relation
+    best_prop, best_val, best_score, c_rm = None, None, 0.0, 0.0
+    pred_words = set(predicate.split())
+
+    for rel in relations:
+        prop_label = rel.get("property_label", "").lower()
+        val_label  = rel.get("value_label", "")
+
+        # Check C_RM: exact keyword match = 1.0, synonym match = 0.5
+        current_c_rm = 0.0
+        if any(w in prop_label for w in pred_words if len(w) > 2):
+            current_c_rm = 1.0
+        else:
+            for key, synonyms in PREDICATE_SYNONYMS.items():
+                if key in predicate or any(s in predicate for s in synonyms):
+                    if any(s in prop_label for s in synonyms + [key]):
+                        current_c_rm = 0.5
+                        break
+
+        if current_c_rm > 0:
+            score = compute_object_match_score(obj_text, val_label)
+            if score > best_score or (score == best_score and current_c_rm > c_rm):
+                best_score = score
+                best_prop  = prop_label
+                best_val   = val_label
+                c_rm       = current_c_rm
+
+    confidence = compute_confidence(c_el_subj, c_el_obj, c_rm, c_kg)
+
+    if best_prop is None:
+        result["evidence"]   = "Predicate could not be mapped to any KG property"
+        result["confidence"] = confidence
+        return result
+
+    # Property was matched
+    result["property_matched"]   = True
+    result["matched_property"]   = best_prop
+    result["object_match_score"] = best_score
+    result["confidence"]         = confidence
+    result["kg_says"]            = best_val
+
+    if best_score >= CONFIG["obj_match_threshold"]:
+        result["status"]   = "SUPPORTED"
+        result["evidence"] = ("Wikidata confirms: {} -> {} -> {}".format(
+            result["subject"], best_prop, best_val))
+    elif best_val:
+        result["status"]   = "CONTRADICTED"
+        result["evidence"] = ("Wikidata contradicts: {} -> {} -> '{}' "
+                              "(LLM said '{}')".format(
+            result["subject"], best_prop, best_val, obj_text))
+    else:
+        result["evidence"] = "Property matched but no value to compare"
+
+    return result
+
+
+def _aggregate_verdicts(claim_results):
+    """Determine overall response verdict from individual claim verdicts."""
+    statuses    = [c["status"] for c in claim_results]
+    confidences = [c["confidence"] for c in claim_results]
+
+    if "CONTRADICTED" in statuses:
+        contradicted_confs = [c["confidence"] for c in claim_results
+                               if c["status"] == "CONTRADICTED"]
+        return "HALLUCINATED", 1, float(np.mean(contradicted_confs))
+    if all(s == "UNVERIFIABLE" for s in statuses):
+        return "UNVERIFIABLE", 0, 0.10
+    return "FACTUAL", 0, float(np.mean(confidences)) if confidences else 0.5
+
+
+def _empty_result(text, reason):
+    """Return empty result dict for samples that cannot be processed."""
+    return {
+        "text": text, "triples_extracted": 0,
+        "overall_verdict": "UNVERIFIABLE", "predicted_label": 0,
+        "overall_confidence": 0.1, "claim_results": [],
+        "hallucinated_spans": [], "processing_time_sec": 0.0,
+        "subject_id": None, "object_id": None,
+        "property_matched": False,
+        "n_supported": 0, "n_contradicted": 0, "n_unverifiable": 0,
+        "skip_reason": reason
+    }
+
+
+def predict_with_threshold(result, threshold):
+    """Convert pipeline result to binary prediction using confidence threshold."""
+    if result["overall_verdict"] == "HALLUCINATED":
+        return 1
+    if result["overall_confidence"] < threshold and result["triples_extracted"] > 0:
+        return 1
+    return 0
+
+
+def verify_single_response(text, extractor, linker, kg_engine):
+    """
+    Full pipeline for ONE text string.
+    Returns dict with overall verdict and ALL columns needed for results_df.
+    """
+    start = time.time()
+
+    if not text or not text.strip():
+        return _empty_result(text, "empty input")
+
+    triples = extractor.extract_triples(text)
+    if not triples:
+        return _empty_result(text, "no triples extracted")
+
+    claim_results = []
+    for triple in triples:
+        subj_link = linker.search_entity(triple["subject"])
+        obj_link  = linker.search_entity(triple["object"])
+        subj_id   = subj_link.get("entity_id")
+        relations = kg_engine.get_relations(subj_id) if subj_id else []
+        verdict   = verify_single_triple(triple, subj_link, obj_link, relations)
+        claim_results.append(verdict)
+
+    overall_verdict, predicted_label, overall_conf = _aggregate_verdicts(claim_results)
+    hallucinated_spans = [c["object"] for c in claim_results
+                          if c["status"] == "CONTRADICTED"]
+
+    elapsed = time.time() - start
+    return {
+        "text":                text,
+        "triples_extracted":   len(triples),
+        "overall_verdict":     overall_verdict,
+        "predicted_label":     predicted_label,
+        "overall_confidence":  overall_conf,
+        "claim_results":       claim_results,
+        "hallucinated_spans":  hallucinated_spans,
+        "processing_time_sec": elapsed,
+        "subject_id":         claim_results[0]["subject_id"]    if claim_results else None,
+        "object_id":          claim_results[0]["object_id"]     if claim_results else None,
+        "property_matched":   any(c["property_matched"] for c in claim_results),
+        "n_supported":        sum(1 for c in claim_results if c["status"]=="SUPPORTED"),
+        "n_contradicted":     sum(1 for c in claim_results if c["status"]=="CONTRADICTED"),
+        "n_unverifiable":     sum(1 for c in claim_results if c["status"]=="UNVERIFIABLE"),
+    }
+
+
+print("VerificationEngine functions defined")
+print("  - compute_confidence()")
+print("  - compute_kg_coverage_score()")
+print("  - verify_single_triple()")
+print("  - verify_single_response()")
+print("  - predict_with_threshold()")
+print("  - _aggregate_verdicts()")
+print("  - _empty_result()")

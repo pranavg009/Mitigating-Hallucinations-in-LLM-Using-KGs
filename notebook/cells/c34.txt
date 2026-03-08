@@ -1,0 +1,230 @@
+#TYPE:code
+# ==============================================================================
+# Cell 34: Generate all 9 thesis tables, save to thesis_tables.txt
+# ==============================================================================
+
+print("=" * 60)
+print("GENERATING ALL 9 THESIS TABLES")
+print("=" * 60)
+
+tables_output = []
+
+def add_table(title, content):
+    tables_output.append(f"\n{'='*70}")
+    tables_output.append(title)
+    tables_output.append(f"{'='*70}")
+    tables_output.append(content)
+    print(f"  Generated: {title}")
+
+# ---------- TABLE 1: Dataset Statistics ----------
+domain_dist = test_df["domain"].value_counts()
+domain_str = "\n".join(["    {}: {}".format(d, c) for d, c in domain_dist.items()])
+
+t1 = """
+  Total QA pairs loaded:        {}
+  Total rows after flatten:     {}
+  Validation set size:          {}
+  Test set size:                {}
+  Class balance:                50% Factual / 50% Hallucinated
+  Avg answer length (words):    {:.1f}
+  Domain distribution (test):
+{}
+""".format(
+    CONFIG["total_halueval_pairs"],
+    CONFIG["total_halueval_pairs"] * 2,
+    len(val_df), len(test_df),
+    test_df["answer_length_words"].mean(),
+    domain_str
+)
+add_table("TABLE 1: Dataset Statistics", t1)
+
+# ---------- TABLE 2: Main KG-Verify Results ----------
+try:
+    auroc = roc_auc_score(y_test_true, results_df["overall_confidence"].values)
+except Exception:
+    auroc = 0.5
+
+unverifiable_rate = (results_df["overall_verdict"] == "UNVERIFIABLE").mean() * 100
+avg_triples = results_df["triples_extracted"].mean()
+avg_time = results_df["processing_time_sec"].mean()
+
+kg_ci = all_bootstrap_cis.get("KG-Verify (Ours)", {})
+p_ci = all_bootstrap_cis.get("KG-Verify_Precision", {})
+r_ci = all_bootstrap_cis.get("KG-Verify_Recall", {})
+a_ci = all_bootstrap_cis.get("KG-Verify_Accuracy", {})
+
+t2 = """
+  Metric                     Value          95% CI
+  ---------------------------------------------------------
+  Accuracy                   {:.3f}          [{:.3f}, {:.3f}]
+  Precision                  {:.3f}          [{:.3f}, {:.3f}]
+  Recall                     {:.3f}          [{:.3f}, {:.3f}]
+  F1-Score                   {:.3f}          [{:.3f}, {:.3f}]
+  Macro-F1                   {:.3f}
+  Weighted-F1                {:.3f}
+  AUROC                      {:.3f}
+  ECE                        {:.4f}
+  Avg Confidence (Correct)   {:.3f}
+  Avg Confidence (Wrong)     {:.3f}
+  Unverifiable Rate          {:.1f}%
+  Avg Triples/Sample         {:.2f}
+  Avg Time/Sample (sec)      {:.2f}
+""".format(
+    kg_acc, a_ci.get("lower",0), a_ci.get("upper",0),
+    kg_p, p_ci.get("lower",0), p_ci.get("upper",0),
+    kg_r, r_ci.get("lower",0), r_ci.get("upper",0),
+    kg_f1, kg_ci.get("f1_lower",0), kg_ci.get("f1_upper",0),
+    f1_score(y_test_true, kg_preds, average="macro"),
+    f1_score(y_test_true, kg_preds, average="weighted"),
+    auroc, ece_value,
+    avg_conf_correct, avg_conf_wrong,
+    unverifiable_rate, avg_triples, avg_time
+)
+add_table("TABLE 2: Main KG-Verify Results with Bootstrap 95% CIs", t2)
+
+# ---------- TABLE 3: Full Baseline Comparison ----------
+t3_header = "  {:20s} {:>10s} {:>10s} {:>20s} {:>10s} {:>15s}".format(
+    "Method", "Precision", "Recall", "F1 (95% CI)", "Accuracy", "Granularity")
+t3_rows = []
+
+systems_for_table = [
+    ("Random (mean+/-std)", random_results["precision_mean"],
+     random_results["recall_mean"],
+     "{:.3f} +/- {:.3f}".format(random_results["f1_mean"], random_results["f1_std"]),
+     random_results["accuracy_mean"], "Response"),
+    ("Majority Class", majority_results["precision"],
+     majority_results["recall"],
+     "{:.3f}".format(majority_results["f1"]),
+     majority_results["accuracy"], "Response"),
+    ("NLI (DeBERTa)", nli_p, nli_r,
+     "{:.3f} [{:.3f},{:.3f}]".format(
+         all_bootstrap_cis["NLI (DeBERTa)"]["f1_mean"],
+         all_bootstrap_cis["NLI (DeBERTa)"]["f1_lower"],
+         all_bootstrap_cis["NLI (DeBERTa)"]["f1_upper"]),
+     nli_acc, "Response"),
+    ("SelfCheckGPT", sc_p, sc_r,
+     "{:.3f} [{:.3f},{:.3f}]".format(
+         all_bootstrap_cis["SelfCheckGPT"]["f1_mean"],
+         all_bootstrap_cis["SelfCheckGPT"]["f1_lower"],
+         all_bootstrap_cis["SelfCheckGPT"]["f1_upper"]),
+     sc_acc, "Response"),
+    ("FactAlign", fa_p, fa_r,
+     "{:.3f} [{:.3f},{:.3f}]".format(
+         all_bootstrap_cis["FactAlign"]["f1_mean"],
+         all_bootstrap_cis["FactAlign"]["f1_lower"],
+         all_bootstrap_cis["FactAlign"]["f1_upper"]),
+     fa_acc, "Triple"),
+    ("RAG (SimSem)", rag_p, rag_r,
+     "{:.3f} [{:.3f},{:.3f}]".format(
+         all_bootstrap_cis["RAG"]["f1_mean"],
+         all_bootstrap_cis["RAG"]["f1_lower"],
+         all_bootstrap_cis["RAG"]["f1_upper"]),
+     rag_acc, "Response"),
+    ("KG-Verify (OURS)", kg_p, kg_r,
+     "{:.3f} [{:.3f},{:.3f}]".format(
+         kg_ci.get("f1_mean", kg_f1),
+         kg_ci.get("f1_lower", 0),
+         kg_ci.get("f1_upper", 0)),
+     kg_acc, "Claim"),
+]
+
+for name, p, r, f1_str, acc, gran in systems_for_table:
+    t3_rows.append("  {:20s} {:>10.3f} {:>10.3f} {:>20s} {:>10.3f} {:>15s}".format(
+        name, p, r, f1_str, acc, gran))
+
+t3 = t3_header + "\n  " + "-"*85 + "\n" + "\n".join(t3_rows)
+add_table("TABLE 3: Full Baseline Comparison", t3)
+
+# ---------- TABLE 4: RAG vs KG-Verify vs Combined ----------
+t4_header = "  {:25s} {:>10s} {:>8s} {:>8s} {:>10s} {:>12s} {:>12s}".format(
+    "System", "Precision", "Recall", "F1", "D/RAG", "D/KG", "Catch%")
+t4_rows = []
+
+rag_catch = ((rag_preds == 1) & (y_test_true == 1)).sum() / (y_test_true == 1).sum() * 100
+kg_catch  = ((kg_preds == 1) & (y_test_true == 1)).sum() / (y_test_true == 1).sum() * 100
+
+t4_rows.append("  {:25s} {:>10.3f} {:>8.3f} {:>8.3f} {:>10s} {:>12s} {:>12.1f}".format(
+    "RAG", rag_p, rag_r, rag_f1, "-", "-", rag_catch))
+t4_rows.append("  {:25s} {:>10.3f} {:>8.3f} {:>8.3f} {:>10s} {:>12s} {:>12.1f}".format(
+    "KG-Verify", kg_p, kg_r, kg_f1, "-", "-", kg_catch))
+
+for cname in ["OR (Union)", "AND (Intersection)", "Sequential (RAG->KG)"]:
+    if cname in combined_results:
+        cr = combined_results[cname]
+        catch = ((cr["predictions"] == 1) & (y_test_true == 1)).sum() / (y_test_true == 1).sum() * 100
+        t4_rows.append("  {:25s} {:>10.3f} {:>8.3f} {:>8.3f} {:>+10.3f} {:>+12.3f} {:>12.1f}".format(
+            cname, cr["precision"], cr["recall"], cr["f1"],
+            cr["improvement_over_rag"], cr["improvement_over_kg"], catch))
+
+t4 = t4_header + "\n  " + "-"*90 + "\n" + "\n".join(t4_rows)
+add_table("TABLE 4: RAG vs KG-Verify vs Combined Architecture", t4)
+
+# ---------- TABLE 5: McNemar Tests ----------
+t5_rows = []
+for comparison, pval in mcnemar_results.items():
+    sig = "YES (p<0.05)" if pval < 0.05 else "NO"
+    t5_rows.append("  {:35s} p={:.4f}  Significant: {}".format(comparison, pval, sig))
+t5 = "\n".join(t5_rows)
+add_table("TABLE 5: McNemar Statistical Significance Tests", t5)
+
+# ---------- TABLE 6: Ablation Study ----------
+t6_header = "  {:30s} {:>10s} {:>8s} {:>8s} {:>12s}".format(
+    "Configuration", "Precision", "Recall", "F1", "Delta F1")
+t6_rows = []
+for aname, ares in ablation_results.items():
+    t6_rows.append("  {:30s} {:>10.3f} {:>8.3f} {:>8.3f} {:>+12.3f}".format(
+        aname, ares["precision"], ares["recall"], ares["f1"], ares["delta_f1"]))
+t6 = t6_header + "\n  " + "-"*70 + "\n" + "\n".join(t6_rows)
+add_table("TABLE 6: Ablation Study Results", t6)
+
+# ---------- TABLE 7: Verifiable Subset ----------
+t7 = """
+  {:25s} {:>8s} {:>8s} {:>12s}
+  {}
+  {:25s} {:>8.3f} {:>8d} {:>12s}
+  {:25s} {:>8.3f} {:>8d} {:>12.2f}%
+  {:25s} {:>8.3f} {:>8d} {:>12.2f}%
+""".format(
+    "Level", "F1", "Count", "% of Test",
+    "-"*55,
+    "All Samples",
+    verifiable_results["overall_f1"], len(test_df), "100.00",
+    "Verifiable Subset",
+    verifiable_results["verifiable_f1"],
+    verifiable_results["verifiable_count"],
+    verifiable_results["verifiable_pct"],
+    "KG-Covered Subset",
+    verifiable_results["kg_covered_f1"],
+    verifiable_results["kg_covered_count"],
+    100 - verifiable_results["kg_coverage_gap_pct"]
+)
+add_table("TABLE 7: Verifiable Subset Analysis", t7)
+
+# ---------- TABLE 8: Domain-Stratified ----------
+t8_header = "  {:15s} {:>8s} {:>10s} {:>8s} {:>8s}".format(
+    "Domain", "Samples", "Precision", "Recall", "F1")
+t8_rows = []
+for dname, dres in domain_results.items():
+    t8_rows.append("  {:15s} {:>8d} {:>10.3f} {:>8.3f} {:>8.3f}".format(
+        dname, dres["n_samples"], dres["precision"], dres["recall"], dres["f1"]))
+t8 = t8_header + "\n  " + "-"*55 + "\n" + "\n".join(t8_rows)
+add_table("TABLE 8: Domain-Stratified Performance", t8)
+
+# ---------- TABLE 9: Error Taxonomy ----------
+t9_header = "  {:25s} {:>8s} {:>12s} {:>30s}".format(
+    "Error Type", "Count", "Percentage", "Example")
+t9_rows = []
+for etype, info in error_taxonomy.items():
+    example = info["examples"][0]["answer"][:30] + "..." if info["examples"] else "N/A"
+    t9_rows.append("  {:25s} {:>8d} {:>11.1f}% {:>30s}".format(
+        etype, info["count"], info["pct"], example))
+t9 = t9_header + "\n  " + "-"*80 + "\n" + "\n".join(t9_rows)
+add_table("TABLE 9: Error Taxonomy", t9)
+
+# Save all tables to file
+tables_text = "\n".join(tables_output)
+with open(CONFIG["output_dir"] + "thesis_tables.txt", "w") as f:
+    f.write(tables_text)
+
+print(f"\nAll 9 tables saved to {CONFIG['output_dir']}thesis_tables.txt")
+print(tables_text)

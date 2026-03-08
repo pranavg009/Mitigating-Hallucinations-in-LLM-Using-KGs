@@ -1,0 +1,138 @@
+#TYPE:code
+# ==============================================================================
+# Cell 35: Final formatted summary box + save errors log
+# ==============================================================================
+
+# Save errors log
+with open(CONFIG["output_dir"] + "errors_log.txt", "w") as f:
+    for err in errors_list:
+        f.write(json.dumps(err) + "\n")
+
+# Compute final stats
+total_runtime = (time.time() - TOTAL_START_TIME) / 60
+
+# Get best baseline F1
+baseline_f1s = {
+    "Random": random_results["f1_mean"],
+    "Majority": majority_results["f1"],
+    "NLI": nli_f1,
+    "SelfCheckGPT": sc_f1,
+    "FactAlign": fa_f1,
+    "RAG": rag_f1,
+}
+best_baseline_name = max(baseline_f1s, key=baseline_f1s.get)
+best_baseline_f1 = baseline_f1s[best_baseline_name]
+
+# Get combined sequential results
+seq_results = combined_results.get("Sequential (RAG->KG)", {})
+seq_f1 = seq_results.get("f1", 0)
+
+# Get best vs KG-Verify McNemar
+best_baseline_mcnemar_key = "KG-Verify vs {}".format(best_baseline_name)
+best_pval = mcnemar_results.get(best_baseline_mcnemar_key, 1.0)
+rag_pval = mcnemar_results.get("KG-Verify vs RAG", 1.0)
+
+# Hallucination catch rates
+kg_catch_rate = ((kg_preds == 1) & (y_test_true == 1)).sum() / (y_test_true == 1).sum() * 100
+
+# Bootstrap CIs for display
+kg_ci_f1 = all_bootstrap_cis.get("KG-Verify (Ours)", {})
+kg_acc_ci = all_bootstrap_cis.get("KG-Verify_Accuracy", {})
+kg_p_ci = all_bootstrap_cis.get("KG-Verify_Precision", {})
+kg_r_ci = all_bootstrap_cis.get("KG-Verify_Recall", {})
+
+print("""
++======================================================================+
+|        KG-VERIFY V4 CORRECTED -- COMPLETE EVALUATION RESULTS          |
++======================================================================+
+|  Dataset:    HaluEval QA (pminervini/HaluEval) -- {test_n} test rows    |
+|  Extraction: REBEL (Babelscape/rebel-large) + spaCy fallback         |
+|  KG Source:  Wikidata SPARQL endpoint                                |
+|  Threshold:  {thresh:.2f} (tuned on {val_n} validation samples)            |
++======================================================================+
+|  KG-VERIFY (OURS):                                                    |
+|    Accuracy:          {acc:.2f}%  (95% CI: [{acc_l:.2f}%, {acc_u:.2f}%])       |
+|    Precision:         {prec:.3f}   (95% CI: [{p_l:.3f}, {p_u:.3f}])          |
+|    Recall:            {rec:.3f}   (95% CI: [{r_l:.3f}, {r_u:.3f}])          |
+|    F1-Score:          {f1:.3f}   (95% CI: [{f1_l:.3f}, {f1_u:.3f}])  <-overall|
+|    F1 (verifiable):   {vf1:.3f}   (KG-covered subset only)              |
+|    ECE:               {ece:.4f}  (confidence calibration error)         |
++======================================================================+
+|  BASELINE COMPARISON:                                                 |
+|    Random (30 runs): F1 = {rand_f1:.3f} +/- {rand_std:.3f}  (best: {rand_best:.3f})   |
+|    Majority Class:   F1 = {maj_f1:.3f}                                    |
+|    NLI (DeBERTa):    F1 = {nli_f1v:.3f}  (95% CI: [{nli_l:.3f}, {nli_u:.3f}])  |
+|    SelfCheckGPT:     F1 = {sc_f1v:.3f}  (95% CI: [{sc_l:.3f}, {sc_u:.3f}])  |
+|    FactAlign:        F1 = {fa_f1v:.3f}  (95% CI: [{fa_l:.3f}, {fa_u:.3f}])  |
+|    RAG (SimSem):     F1 = {rag_f1v:.3f}  (95% CI: [{rag_l:.3f}, {rag_u:.3f}])  |
+|    KG-Verify (OURS): F1 = {f1:.3f}                                       |
++======================================================================+
+|  COMBINED SYSTEM (RAG + KG-Verify):                                   |
+|    Sequential:    F1 = {seq:.3f}  (delta over best single: {seq_delta:+.3f})    |
+|    Hallucination Catch Rate: {catch:.1f}%                               |
++======================================================================+
+|  STATISTICAL SIGNIFICANCE:                                            |
+|    vs Best Baseline ({best_bl}): p = {best_p:.4f} -- Significant: {best_sig}  |
+|    vs RAG:           p = {rag_pv:.4f} -- Significant: {rag_sig}              |
++======================================================================+
+|  KG COVERAGE: {ver_pct:.1f}% verifiable | {gap:.1f}% coverage gap            |
+|  AVG TIME/SAMPLE: {avg_t:.2f} sec | TOTAL RUNTIME: {total_t:.1f} min       |
++======================================================================+
+|  SAVED FILES:                                                         |
+|  results_test.csv          evaluation_main.png                        |
+|  calibration_curve.png     ablation_study.png                         |
+|  rag_comparison.png        threshold_tuning.png                       |
+|  random_baseline_distribution.png  thesis_tables.txt                  |
+|  errors_log.txt            intermediate_*.csv                         |
++======================================================================+
+""".format(
+    test_n=len(test_df),
+    thresh=CONFIG["confidence_threshold"],
+    val_n=len(val_df),
+    acc=kg_acc*100,
+    acc_l=kg_acc_ci.get("lower",0)*100,
+    acc_u=kg_acc_ci.get("upper",0)*100,
+    prec=kg_p,
+    p_l=kg_p_ci.get("lower",0),
+    p_u=kg_p_ci.get("upper",0),
+    rec=kg_r,
+    r_l=kg_r_ci.get("lower",0),
+    r_u=kg_r_ci.get("upper",0),
+    f1=kg_f1,
+    f1_l=kg_ci_f1.get("f1_lower",0),
+    f1_u=kg_ci_f1.get("f1_upper",0),
+    vf1=verifiable_results["verifiable_f1"],
+    ece=ece_value,
+    rand_f1=random_results["f1_mean"],
+    rand_std=random_results["f1_std"],
+    rand_best=random_results["f1_best"],
+    maj_f1=majority_results["f1"],
+    nli_f1v=nli_f1,
+    nli_l=all_bootstrap_cis["NLI (DeBERTa)"]["f1_lower"],
+    nli_u=all_bootstrap_cis["NLI (DeBERTa)"]["f1_upper"],
+    sc_f1v=sc_f1,
+    sc_l=all_bootstrap_cis["SelfCheckGPT"]["f1_lower"],
+    sc_u=all_bootstrap_cis["SelfCheckGPT"]["f1_upper"],
+    fa_f1v=fa_f1,
+    fa_l=all_bootstrap_cis["FactAlign"]["f1_lower"],
+    fa_u=all_bootstrap_cis["FactAlign"]["f1_upper"],
+    rag_f1v=rag_f1,
+    rag_l=all_bootstrap_cis["RAG"]["f1_lower"],
+    rag_u=all_bootstrap_cis["RAG"]["f1_upper"],
+    seq=seq_f1,
+    seq_delta=seq_f1 - max(rag_f1, kg_f1),
+    catch=kg_catch_rate,
+    best_bl=best_baseline_name,
+    best_p=best_pval,
+    best_sig="YES" if best_pval < 0.05 else "NO",
+    rag_pv=rag_pval,
+    rag_sig="YES" if rag_pval < 0.05 else "NO",
+    ver_pct=verifiable_results["verifiable_pct"],
+    gap=verifiable_results["kg_coverage_gap_pct"],
+    avg_t=results_df["processing_time_sec"].mean(),
+    total_t=total_runtime
+))
+
+print(f"Total errors logged: {len(errors_list)}")
+print(f"Errors log saved to: {CONFIG['output_dir']}errors_log.txt")
+print("\nNotebook execution complete!")

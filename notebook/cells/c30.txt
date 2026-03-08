@@ -1,0 +1,84 @@
+#TYPE:code
+# ==============================================================================
+# Cell 30: Error taxonomy analysis with real examples from test data
+# ==============================================================================
+
+print("=" * 60)
+print("ERROR TAXONOMY ANALYSIS")
+print("=" * 60)
+
+# Classify errors
+error_types = {
+    "Entity Not Found":        [],
+    "No Triples Extracted":    [],
+    "Predicate Not Mapped":    [],
+    "Object Mismatch (FP)":    [],
+    "Unverifiable (FN)":       [],
+    "Correct Contradiction":   []
+}
+
+for i, (result, (_, row)) in enumerate(zip(results_list, test_df.iterrows())):
+    true_label = row["true_label"]
+    pred_label = result["predicted_label"]
+
+    if result["triples_extracted"] == 0:
+        error_types["No Triples Extracted"].append({
+            "idx": i, "answer": row["answer"][:100],
+            "true": true_label, "pred": pred_label
+        })
+        continue
+
+    claim_results = result.get("claim_results", [])
+    if not claim_results:
+        continue
+
+    has_entity = any(c.get("subject_id") for c in claim_results)
+    has_property = any(c.get("property_matched") for c in claim_results)
+
+    if not has_entity:
+        error_types["Entity Not Found"].append({
+            "idx": i, "answer": row["answer"][:100],
+            "true": true_label, "pred": pred_label
+        })
+    elif not has_property:
+        error_types["Predicate Not Mapped"].append({
+            "idx": i, "answer": row["answer"][:100],
+            "true": true_label, "pred": pred_label
+        })
+    elif pred_label == 1 and true_label == 0:
+        error_types["Object Mismatch (FP)"].append({
+            "idx": i, "answer": row["answer"][:100],
+            "true": true_label, "pred": pred_label
+        })
+    elif pred_label == 0 and true_label == 1:
+        error_types["Unverifiable (FN)"].append({
+            "idx": i, "answer": row["answer"][:100],
+            "true": true_label, "pred": pred_label
+        })
+    elif pred_label == 1 and true_label == 1:
+        error_types["Correct Contradiction"].append({
+            "idx": i, "answer": row["answer"][:100],
+            "true": true_label, "pred": pred_label
+        })
+
+total_errors = sum(len(v) for v in error_types.values())
+error_taxonomy = {}
+
+print(f"\n{'Error Type':<25s} {'Count':>8s} {'Percentage':>12s}")
+print("-" * 50)
+for etype, examples in error_types.items():
+    count = len(examples)
+    pct = count / len(test_df) * 100 if len(test_df) > 0 else 0
+    error_taxonomy[etype] = {"count": count, "pct": pct, "examples": examples[:2]}
+    print(f"{etype:<25s} {count:>8d} {pct:>11.1f}%")
+
+# Show 2 real examples per error type
+print(f"\n{'=' * 60}")
+print("EXAMPLE ERRORS (2 per type)")
+print(f"{'=' * 60}")
+for etype, info in error_taxonomy.items():
+    if info["examples"]:
+        print(f"\n  [{etype}]")
+        for j, ex in enumerate(info["examples"][:2]):
+            print(f"    Example {j+1}: \"{ex['answer'][:80]}...\"")
+            print(f"      True={ex['true']}, Predicted={ex['pred']}")

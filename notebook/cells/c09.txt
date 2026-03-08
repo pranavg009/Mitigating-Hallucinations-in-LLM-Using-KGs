@@ -1,0 +1,98 @@
+#TYPE:code
+# ==============================================================================
+# Cell 9: EntityLinker class — Wikidata entity search + link_triple + batch_link
+# ==============================================================================
+
+class EntityLinker:
+    """Link entity text to Wikidata Q-numbers using the public search API."""
+
+    def __init__(self):
+        self.cache = {}
+        self.api_calls = 0
+
+    def search_entity(self, entity_name):
+        """
+        Map entity text to Wikidata Q-number using the public search API.
+        No API key required.
+        Returns dict with entity_id (Q-number) and confidence.
+        """
+        if not entity_name or not entity_name.strip():
+            return {"entity_id": None, "label": "", "description": "",
+                    "confidence": 0.0}
+
+        cache_key = entity_name.lower().strip()
+        if cache_key in self.cache:
+            return self.cache[cache_key]
+
+        result = self._search_wikidata(entity_name)
+        self.cache[cache_key] = result
+        return result
+
+    def _search_wikidata(self, entity_name):
+        """Call Wikidata Search API with retries."""
+        max_retries = CONFIG["api_max_retries"]
+        params = {
+            "action":   "wbsearchentities",
+            "search":   entity_name,
+            "language": "en",
+            "format":   "json",
+            "limit":    CONFIG["entity_search_limit"]
+        }
+        headers = {"User-Agent": CONFIG["sparql_user_agent"]}
+
+        for attempt in range(max_retries):
+            try:
+                time.sleep(CONFIG["api_delay"])
+                self.api_calls += 1
+                response = requests.get(
+                    CONFIG["wikidata_api"],
+                    params=params,
+                    headers=headers,
+                    timeout=10
+                )
+                data = response.json()
+                if data.get("search"):
+                    top = data["search"][0]
+                    return {
+                        "entity_id":   top.get("id"),
+                        "label":       top.get("label", ""),
+                        "description": top.get("description", ""),
+                        "confidence":  1.0
+                    }
+                return {"entity_id": None, "label": "", "description": "",
+                        "confidence": 0.0}
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    time.sleep(2 ** attempt)
+                else:
+                    errors_list.append({
+                        "stage": "entity_linking",
+                        "entity": entity_name,
+                        "error": str(e)
+                    })
+                    return {"entity_id": None, "label": "", "description": "",
+                            "confidence": 0.0}
+
+    def link_triple(self, triple):
+        """Link both subject and object of a triple to Wikidata."""
+        subject_link = self.search_entity(triple.get("subject", ""))
+        object_link = self.search_entity(triple.get("object", ""))
+        return subject_link, object_link
+
+    def batch_link(self, triples_list):
+        """Link entities for a list of triple lists."""
+        results = []
+        for triples in tqdm(triples_list, desc="Entity linking"):
+            linked = []
+            for triple in triples:
+                subj_link, obj_link = self.link_triple(triple)
+                linked.append({
+                    "triple": triple,
+                    "subject_link": subj_link,
+                    "object_link": obj_link
+                })
+            results.append(linked)
+        return results
+
+
+print("EntityLinker class defined")

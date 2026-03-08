@@ -1,0 +1,342 @@
+#TYPE:code
+# ==============================================================================
+# Cell 16: BaselineModels — all 6 baseline functions + combined + reduction rate
+# ==============================================================================
+
+def random_baseline_full(y_true, n_runs=None):
+    """
+    Run random prediction 30 times with 30 different seeds.
+    Reports mean +/- std and 95% CI across all 30 runs.
+    KG-Verify must beat even the BEST single random run to be credible.
+    """
+    n_runs = n_runs or CONFIG["random_baseline_runs"]
+    all_f1, all_precision, all_recall, all_accuracy = [], [], [], []
+
+    for seed in range(1, n_runs + 1):
+        np.random.seed(seed)
+        y_pred = np.random.randint(0, 2, size=len(y_true))
+        all_f1.append(f1_score(y_true, y_pred, average="binary"))
+        all_precision.append(precision_score(y_true, y_pred, zero_division=0))
+        all_recall.append(recall_score(y_true, y_pred, zero_division=0))
+        all_accuracy.append(accuracy_score(y_true, y_pred))
+
+    # Restore main seed
+    np.random.seed(CONFIG["random_state"])
+
+    return {
+        "f1_mean":        np.mean(all_f1),
+        "f1_std":         np.std(all_f1),
+        "f1_best":        np.max(all_f1),
+        "f1_worst":       np.min(all_f1),
+        "f1_ci_lower":    np.percentile(all_f1, 2.5),
+        "f1_ci_upper":    np.percentile(all_f1, 97.5),
+        "precision_mean": np.mean(all_precision),
+        "recall_mean":    np.mean(all_recall),
+        "accuracy_mean":  np.mean(all_accuracy),
+        "all_f1_scores":  all_f1
+    }
+
+
+def majority_class_baseline(y_true):
+    """
+    Always predict label=1 (HALLUCINATED) for every sample.
+    With balanced classes (2000 each): Recall=1.0, Precision=0.5, F1~0.667
+    """
+    y_pred = np.ones(len(y_true), dtype=int)
+    return {
+        "predictions": y_pred,
+        "f1":          f1_score(y_true, y_pred, average="binary"),
+        "precision":   precision_score(y_true, y_pred, zero_division=0),
+        "recall":      recall_score(y_true, y_pred, zero_division=0),
+        "accuracy":    accuracy_score(y_true, y_pred)
+    }
+
+
+def nli_baseline(df, device):
+    """
+    NLI baseline using cross-encoder/nli-deberta-v3-small.
+    Represents pure neural approaches without structured knowledge.
+    """
+    from transformers import pipeline as hf_pipeline
+    print("  Loading NLI model (DeBERTa)...")
+    nli_pipe = hf_pipeline(
+        "text-classification",
+        model=CONFIG["nli_model_name"],
+        device=0 if device == "cuda" else -1
+    )
+    label_map = {"entailment": 0, "contradiction": 1, "neutral": 0}
+    predictions = []
+
+    for _, row in tqdm(df.iterrows(), total=len(df), desc="NLI Baseline"):
+        try:
+            premise    = str(row["knowledge"])[:300] + " " + str(row["question"])[:100]
+            hypothesis = str(row["answer"])[:200]
+            result     = nli_pipe({"text": premise, "text_pair": hypothesis})
+            pred       = label_map.get(result[0]["label"].lower(), 0)
+            predictions.append(pred)
+        except Exception as e:
+            errors_list.append({"stage": "nli_baseline", "error": str(e)})
+            predictions.append(0)
+
+    # Cleanup
+    del nli_pipe
+    torch.cuda.empty_cache()
+    print("  NLI model unloaded")
+    return np.array(predictions)
+
+
+def tune_selfcheck_threshold(val_df):
+    """Tune BERTScore threshold on validation set. Returns best threshold."""
+    from bert_score import score as bert_score_fn
+    val_df = val_df.reset_index(drop=True)
+
+    unique_questions = val_df["question"].unique()
+    refs, cands, q_order = [], [], []
+    for q in unique_questions:
+        q_rows = val_df[val_df["question"] == q]
+        right  = q_rows[q_rows["true_label"] == 0]
+        hall   = q_rows[q_rows["true_label"] == 1]
+        if len(right) > 0 and len(hall) > 0:
+            refs.append(str(right.iloc[0]["answer"]))
+            cands.append(str(hall.iloc[0]["answer"]))
+            q_order.append(q)
+
+    if not cands:
+        print("  [SelfCheckGPT] No paired questions found for tuning")
+        return 0.85
+
+    print(f"  [SelfCheckGPT] Computing BERTScore for {len(cands)} val pairs...")
+    _, _, F1_scores = bert_score_fn(
+        cands, refs, lang="en",
+        model_type="distilbert-base-uncased", verbose=False)
+
+    best_f1, best_thresh = 0, 0.85
+    for thresh in [0.70, 0.75, 0.80, 0.85, 0.90, 0.95]:
+        preds = np.zeros(len(val_df), dtype=int)
+        for i, q in enumerate(q_order):
+            hall_idx = val_df[(val_df["question"] == q) &
+                               (val_df["true_label"] == 1)].index
+            if F1_scores[i].item() < thresh:
+                for idx in hall_idx:
+                    if idx < len(preds):
+                        preds[idx] = 1
+        f1 = f1_score(val_df["true_label"].values, preds, average="binary")
+        if f1 > best_f1:
+            best_f1, best_thresh = f1, thresh
+
+    print(f"  [SelfCheckGPT] Best threshold: {best_thresh} (Val F1: {best_f1:.3f})")
+    return best_thresh
+
+
+def selfcheck_simulation(df, threshold=0.85):
+    """
+    Simulates SelfCheckGPT (Manakul et al., 2023, arXiv:2303.08896).
+    Uses BERTScore similarity between right_answer and hallucinated_answer.
+    Low BERTScore = inconsistent = likely hallucination.
+    """
+    from bert_score import score as bert_score_fn
+    df = df.reset_index(drop=True)
+    predictions = np.zeros(len(df), dtype=int)
+    unique_questions = df["question"].unique()
+
+    refs, cands, q_order = [], [], []
+    for q in unique_questions:
+        q_rows = df[df["question"] == q]
+        right  = q_rows[q_rows["true_label"] == 0]
+        hall   = q_rows[q_rows["true_label"] == 1]
+        if len(right) > 0 and len(hall) > 0:
+            refs.append(str(right.iloc[0]["answer"]))
+            cands.append(str(hall.iloc[0]["answer"]))
+            q_order.append(q)
+
+    if not cands:
+        return predictions
+
+    print(f"  [SelfCheckGPT] Computing BERTScore for {len(cands)} pairs...")
+    _, _, F1 = bert_score_fn(
+        cands, refs, lang="en",
+        model_type="distilbert-base-uncased", verbose=False)
+
+    for i, q in enumerate(q_order):
+        hall_idx = df[(df["question"] == q) & (df["true_label"] == 1)].index
+        if F1[i].item() < threshold:
+            for idx in hall_idx:
+                if idx < len(predictions):
+                    predictions[idx] = 1
+
+    return predictions
+
+
+def tune_factalign_threshold(val_df, extractor):
+    """Tune Jaccard threshold on validation set."""
+    val_df = val_df.reset_index(drop=True)
+    best_f1, best_thresh = 0, 0.40
+    for thresh in np.arange(0.1, 0.7, 0.05):
+        preds = factalign_simulation(val_df, extractor, round(thresh, 2))
+        f1 = f1_score(val_df["true_label"].values, preds, average="binary")
+        if f1 > best_f1:
+            best_f1, best_thresh = f1, round(thresh, 2)
+    print(f"  [FactAlign] Best threshold: {best_thresh} (Val F1: {best_f1:.3f})")
+    return best_thresh
+
+
+def factalign_simulation(df, extractor, threshold=0.40):
+    """
+    Simulates FactAlign (Rashad et al., 2024, TrustNLP@NAACL).
+    Uses Jaccard similarity between REBEL triple sets.
+    """
+    df = df.reset_index(drop=True)
+    predictions = np.zeros(len(df), dtype=int)
+    for q in tqdm(df["question"].unique(), desc="FactAlign Simulation"):
+        q_rows     = df[df["question"] == q]
+        right_rows = q_rows[q_rows["true_label"] == 0]
+        hall_rows  = q_rows[q_rows["true_label"] == 1]
+        if len(right_rows) == 0 or len(hall_rows) == 0:
+            continue
+        right_triples = extractor.extract_triples(str(right_rows.iloc[0]["answer"]))
+        hall_triples  = extractor.extract_triples(str(hall_rows.iloc[0]["answer"]))
+
+        def t2s(t):
+            return ("{}|{}|{}".format(
+                t.get("subject","").lower().strip(),
+                t.get("predicate","").lower().strip(),
+                t.get("object","").lower().strip()))
+
+        set_r = set(t2s(t) for t in right_triples)
+        set_h = set(t2s(t) for t in hall_triples)
+        union = set_r | set_h
+        jaccard = len(set_r & set_h) / len(union) if union else 1.0
+
+        for idx in hall_rows.index:
+            if idx < len(predictions):
+                predictions[idx] = 1 if jaccard < threshold else 0
+    return predictions
+
+
+def _compute_all_similarities(df, st_model):
+    """Helper: compute cosine similarity between answer and knowledge for each row."""
+    from sentence_transformers import util
+    answers   = df["answer"].tolist()
+    knowledge = df["knowledge"].tolist()
+    all_sims  = []
+    batch_size = 64
+    for i in range(0, len(answers), batch_size):
+        a_emb = st_model.encode(
+            answers[i:i+batch_size],
+            convert_to_tensor=True, show_progress_bar=False)
+        k_emb = st_model.encode(
+            knowledge[i:i+batch_size],
+            convert_to_tensor=True, show_progress_bar=False)
+        sims  = util.cos_sim(a_emb, k_emb).diagonal().cpu().numpy()
+        all_sims.extend(sims.tolist())
+    return np.array(all_sims)
+
+
+def tune_rag_threshold(val_df, st_model):
+    """Tune answer-knowledge similarity threshold on validation set."""
+    sims = _compute_all_similarities(val_df, st_model)
+    best_f1, best_thresh = 0, 0.75
+    for thresh in np.arange(0.50, 0.96, 0.05):
+        preds = (sims < thresh).astype(int)
+        f1 = f1_score(val_df["true_label"].values, preds, average="binary")
+        if f1 > best_f1:
+            best_f1, best_thresh = f1, round(float(thresh), 2)
+    print(f"  [RAG] Best threshold: {best_thresh} (Val F1: {best_f1:.3f})")
+    return best_thresh
+
+
+def rag_simulation_baseline(test_df, val_df):
+    """
+    Simulates RAG (Lewis et al., 2020, NeurIPS) by measuring answer-context
+    semantic similarity using sentence transformers.
+    """
+    from sentence_transformers import SentenceTransformer
+    print("  [RAG] Loading sentence transformer model...")
+    st_model = SentenceTransformer(CONFIG["sentence_model_name"])
+    st_model = st_model.to(CONFIG["device"])
+
+    best_threshold = tune_rag_threshold(val_df, st_model)
+    print(f"  [RAG] Running on test set with threshold={best_threshold}...")
+    test_sims = _compute_all_similarities(test_df, st_model)
+    predictions = (test_sims < best_threshold).astype(int)
+
+    del st_model
+    torch.cuda.empty_cache()
+    print("  [RAG] Model unloaded")
+    return predictions, best_threshold
+
+
+def combined_rag_kgverify(test_df, rag_preds, kg_preds):
+    """
+    Three combination strategies for RAG + KG-Verify:
+    Strategy A - OR (Union): Flag if EITHER flags it.
+    Strategy B - AND (Intersection): Flag only if BOTH flag it.
+    Strategy C - Sequential (RAG first, then KG-Verify).
+    """
+    assert len(rag_preds) == len(kg_preds) == len(test_df), \
+        "Prediction arrays must match test_df length"
+
+    combined_or  = np.logical_or(rag_preds, kg_preds).astype(int)
+    combined_and = np.logical_and(rag_preds, kg_preds).astype(int)
+
+    combined_seq = rag_preds.copy()
+    rag_passed   = (rag_preds == 0)
+    combined_seq[rag_passed] = kg_preds[rag_passed]
+
+    y_true   = test_df["true_label"].values
+    results  = {}
+
+    for name, preds in [
+        ("OR (Union)",              combined_or),
+        ("AND (Intersection)",      combined_and),
+        ("Sequential (RAG->KG)",    combined_seq)
+    ]:
+        results[name] = {
+            "predictions":          preds,
+            "f1":                   f1_score(y_true, preds, average="binary"),
+            "precision":            precision_score(y_true, preds, zero_division=0),
+            "recall":               recall_score(y_true, preds, zero_division=0),
+            "accuracy":             accuracy_score(y_true, preds),
+            "improvement_over_rag": (f1_score(y_true, preds, average="binary") -
+                                     f1_score(y_true, rag_preds, average="binary")),
+            "improvement_over_kg":  (f1_score(y_true, preds, average="binary") -
+                                     f1_score(y_true, kg_preds, average="binary"))
+        }
+
+    return results
+
+
+def compute_hallucination_reduction_rate(y_true, baseline_preds, improved_preds,
+                                          baseline_name, improved_name):
+    """
+    Computes how much the improved system increases hallucination CATCH RATE
+    compared to the baseline system.
+    """
+    total_actual = (y_true == 1).sum()
+    caught_base  = ((baseline_preds == 1) & (y_true == 1)).sum()
+    caught_impr  = ((improved_preds  == 1) & (y_true == 1)).sum()
+
+    base_rate  = caught_base / total_actual * 100
+    impr_rate  = caught_impr / total_actual * 100
+    improvement = impr_rate - base_rate
+
+    print(f"\n{'='*55}")
+    print(f"HALLUCINATION REDUCTION RATE ANALYSIS")
+    print(f"{'='*55}")
+    print(f"Total actual hallucinations in test set: {total_actual}")
+    print(f"{baseline_name:30s} catch rate: {base_rate:.1f}%")
+    print(f"{improved_name:30s} catch rate: {impr_rate:.1f}%")
+    print(f"Improvement: +{improvement:.1f} percentage points")
+    print(f"{'='*55}")
+    return base_rate, impr_rate, improvement
+
+
+print("All baseline functions defined:")
+print("  - random_baseline_full()")
+print("  - majority_class_baseline()")
+print("  - nli_baseline()")
+print("  - selfcheck_simulation() + tune_selfcheck_threshold()")
+print("  - factalign_simulation() + tune_factalign_threshold()")
+print("  - rag_simulation_baseline() + tune_rag_threshold()")
+print("  - combined_rag_kgverify()")
+print("  - compute_hallucination_reduction_rate()")

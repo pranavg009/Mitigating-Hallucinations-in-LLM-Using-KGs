@@ -1,0 +1,51 @@
+#TYPE:code
+# ==============================================================================
+# Cell 24: Combined RAG + KG-Verify experiment (Novel Contribution)
+# ==============================================================================
+
+print("=" * 60)
+print("COMBINED SYSTEM: RAG + KG-VERIFY (Novel Contribution)")
+print("=" * 60)
+
+combined_results = combined_rag_kgverify(test_df, rag_preds, kg_preds)
+
+print("\nCombined System Results:")
+print("-" * 60)
+for name, metrics in combined_results.items():
+    print(f"\n  {name}:")
+    print(f"    F1:        {metrics['f1']:.3f}")
+    print(f"    Precision: {metrics['precision']:.3f}")
+    print(f"    Recall:    {metrics['recall']:.3f}")
+    print(f"    Accuracy:  {metrics['accuracy']:.3f}")
+    print(f"    Delta over RAG:       {metrics['improvement_over_rag']:+.3f}")
+    print(f"    Delta over KG-Verify: {metrics['improvement_over_kg']:+.3f}")
+
+# Compute hallucination reduction rates
+print("\n" + "=" * 60)
+print("HALLUCINATION REDUCTION RATE ANALYSIS")
+print("=" * 60)
+
+# 1. RAG vs KG-Verify
+compute_hallucination_reduction_rate(
+    y_test_true, rag_preds, kg_preds,
+    "RAG Baseline", "KG-Verify")
+
+# 2. Best single system vs Sequential Combined
+best_single_name = "KG-Verify"
+best_single_preds = kg_preds
+if rag_f1 > kg_f1:
+    best_single_name = "RAG"
+    best_single_preds = rag_preds
+
+seq_preds = combined_results["Sequential (RAG->KG)"]["predictions"]
+compute_hallucination_reduction_rate(
+    y_test_true, best_single_preds, seq_preds,
+    best_single_name, "Sequential Combined")
+
+# 3. Random baseline vs KG-Verify
+np.random.seed(1)
+random_single_preds = np.random.randint(0, 2, size=len(y_test_true))
+np.random.seed(CONFIG["random_state"])
+compute_hallucination_reduction_rate(
+    y_test_true, random_single_preds, kg_preds,
+    "Random Baseline", "KG-Verify")

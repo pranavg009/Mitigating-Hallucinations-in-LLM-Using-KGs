@@ -1,0 +1,159 @@
+#TYPE:code
+# ==============================================================================
+# Cell 7: ClaimExtractor class — REBEL model + parse_rebel_output + spaCy fallback
+# ==============================================================================
+
+def parse_rebel_output(generated_text):
+    """
+    Parse REBEL model output into list of triple dicts.
+    REBEL format: <triplet> SUBJECT <subj> OBJECT <obj> RELATION <rel>
+    Note: object comes before relation in REBEL's token sequence.
+    After parsing, output dict is: {"subject", "predicate", "object"}
+    """
+    triples = []
+    for section in generated_text.split("<triplet>")[1:]:
+        try:
+            subj_parts = section.split("<subj>")
+            if len(subj_parts) < 2:
+                continue
+            subject = subj_parts[0].strip()
+
+            obj_parts = subj_parts[1].split("<obj>")
+            if len(obj_parts) < 2:
+                continue
+            obj_text = obj_parts[0].strip()
+
+            rel_parts = obj_parts[1].split("<rel>")
+            relation = rel_parts[0].strip() if rel_parts else ""
+
+            if subject and obj_text and relation:
+                triples.append({
+                    "subject":   subject,
+                    "predicate": relation,
+                    "object":    obj_text
+                })
+        except Exception:
+            continue
+    return triples
+
+
+class ClaimExtractor:
+    """Extract Subject-Predicate-Object triples from text using REBEL or spaCy."""
+
+    def __init__(self, method="rebel"):
+        self.method = method
+        self.rebel_tokenizer = None
+        self.rebel_model = None
+        self.nlp = None
+        self._load_models()
+
+    def _load_models(self):
+        if self.method == "rebel":
+            print("  Loading REBEL model (Babelscape/rebel-large)...")
+            self.rebel_tokenizer = AutoTokenizer.from_pretrained(
+                CONFIG["rebel_model_name"])
+            self.rebel_model = AutoModelForSeq2SeqLM.from_pretrained(
+                CONFIG["rebel_model_name"])
+            self.rebel_model = self.rebel_model.to(CONFIG["device"])
+            self.rebel_model.eval()
+            print(f"  REBEL loaded on {CONFIG['device']}")
+
+        # Always load spaCy as fallback
+        print("  Loading spaCy (en_core_web_sm)...")
+        self.nlp = spacy.load("en_core_web_sm")
+        print("  spaCy loaded")
+
+    def extract_triples(self, text):
+        """Extract triples from text. Falls back to spaCy if REBEL fails."""
+        if not text or not text.strip():
+            return []
+        if self.method == "rebel":
+            triples = self._extract_rebel(text)
+            if not triples:
+                triples = self._extract_spacy(text)
+            return triples
+        return self._extract_spacy(text)
+
+    def _extract_rebel(self, text):
+        """Extract triples using REBEL model."""
+        try:
+            inputs = self.rebel_tokenizer(
+                text,
+                max_length=CONFIG["rebel_max_input_length"],
+                truncation=True,
+                return_tensors="pt"
+            ).to(CONFIG["device"])
+
+            with torch.no_grad():
+                outputs = self.rebel_model.generate(
+                    **inputs,
+                    max_length=CONFIG["rebel_max_gen_length"],
+                    num_beams=CONFIG["rebel_num_beams"],
+                    length_penalty=1.0
+                )
+
+            generated = self.rebel_tokenizer.batch_decode(
+                outputs, skip_special_tokens=False)[0]
+            return parse_rebel_output(generated)
+        except Exception as e:
+            errors_list.append({"stage": "rebel_extraction", "error": str(e)})
+            return []
+
+    def _extract_spacy(self, text):
+        """Fallback: Extract triples using spaCy dependency parsing."""
+        try:
+            doc = self.nlp(text[:1000])
+            triples = []
+            for sent in doc.sents:
+                subj, verb, obj = None, None, None
+                for token in sent:
+                    if token.dep_ in ("nsubj", "nsubjpass"):
+                        # Merge compound nouns into full entity names
+                        compounds = [c.text for c in token.lefts
+                                     if c.dep_ == "compound"]
+                        subj = " ".join(compounds + [token.text])
+                    if token.dep_ == "ROOT":
+                        verb = token.lemma_
+                    if token.dep_ in ("dobj", "pobj", "attr"):
+                        compounds = [c.text for c in token.lefts
+                                     if c.dep_ == "compound"]
+                        obj = " ".join(compounds + [token.text])
+                if subj and verb and obj:
+                    triples.append({
+                        "subject": subj,
+                        "predicate": verb,
+                        "object": obj
+                    })
+            return triples
+        except Exception as e:
+            errors_list.append({"stage": "spacy_extraction", "error": str(e)})
+            return []
+
+    def batch_extract(self, texts):
+        """Extract triples for a list of texts with batching and progress bar."""
+        all_triples = []
+        batch_size = CONFIG["rebel_batch_size"]
+        for i in tqdm(range(0, len(texts), batch_size), desc="Extracting triples"):
+            batch = texts[i:i+batch_size]
+            batch_results = []
+            for text in batch:
+                triples = self.extract_triples(str(text))
+                batch_results.append(triples)
+            all_triples.extend(batch_results)
+            if (i // batch_size + 1) % 100 == 0:
+                torch.cuda.empty_cache()
+        return all_triples
+
+    def cleanup(self):
+        """Unload REBEL model from GPU to free memory."""
+        if self.rebel_model is not None:
+            del self.rebel_model
+            del self.rebel_tokenizer
+            self.rebel_model = None
+            self.rebel_tokenizer = None
+            torch.cuda.empty_cache()
+            print("  REBEL model unloaded from GPU")
+
+
+print("ClaimExtractor class defined")
+print("parse_rebel_output function defined")

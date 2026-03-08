@@ -1,0 +1,22 @@
+#TYPE:code
+# ==============================================================================
+# Cell 22: RAG baseline — tune threshold on val, run on test, clear GPU
+# ==============================================================================
+
+print("=" * 60)
+print("BASELINE 6: RAG SIMULATION (Semantic Similarity)")
+print("=" * 60)
+
+rag_preds, rag_threshold = rag_simulation_baseline(test_df, val_df)
+
+rag_f1  = f1_score(y_test_true, rag_preds, average="binary")
+rag_p   = precision_score(y_test_true, rag_preds, zero_division=0)
+rag_r   = recall_score(y_test_true, rag_preds, zero_division=0)
+rag_acc = accuracy_score(y_test_true, rag_preds)
+
+print(f"\nRAG Simulation (Sentence Transformer):")
+print(f"  Tuned threshold: {rag_threshold}")
+print(f"  F1:        {rag_f1:.3f}")
+print(f"  Precision: {rag_p:.3f}")
+print(f"  Recall:    {rag_r:.3f}")
+print(f"  Accuracy:  {rag_acc:.3f}")

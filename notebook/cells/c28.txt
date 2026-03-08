@@ -1,0 +1,65 @@
+#TYPE:code
+# ==============================================================================
+# Cell 28: Verifiable subset analysis
+# ==============================================================================
+
+print("=" * 60)
+print("VERIFIABLE SUBSET ANALYSIS")
+print("=" * 60)
+
+def compute_verifiable_subset_metrics(results_df):
+    """Three-level analysis: All, Verifiable, KG-covered."""
+    y_true = results_df["true_label"].values
+    y_pred = results_df["predicted_label"].values
+
+    # Level 1: all samples
+    overall_f1  = f1_score(y_true, y_pred, average="binary")
+    overall_acc = accuracy_score(y_true, y_pred)
+
+    # Level 2: verifiable subset (both entities linked)
+    v_mask = (results_df["subject_id"].notna() &
+              results_df["object_id"].notna() &
+              (results_df["subject_id"] != "") &
+              (results_df["object_id"]  != ""))
+    verifiable_count = int(v_mask.sum())
+
+    if verifiable_count >= 50:
+        verifiable_f1 = f1_score(y_true[v_mask], y_pred[v_mask], average="binary")
+    else:
+        verifiable_f1 = overall_f1
+
+    # Level 3: KG-covered subset (entity linked AND property matched)
+    k_mask = v_mask & results_df["property_matched"].fillna(False).astype(bool)
+    kg_covered_count = int(k_mask.sum())
+
+    if kg_covered_count >= 50:
+        kg_covered_f1 = f1_score(y_true[k_mask], y_pred[k_mask], average="binary")
+    else:
+        kg_covered_f1 = verifiable_f1
+
+    print(f"\n{'='*60}")
+    print("VERIFIABLE SUBSET ANALYSIS")
+    print(f"{'='*60}")
+    print(f"All samples:       F1={overall_f1:.3f}  n={len(y_true)} (100%)")
+    print(f"Verifiable subset: F1={verifiable_f1:.3f}  "
+          f"n={verifiable_count} ({verifiable_count/len(y_true)*100:.1f}%)")
+    print(f"KG-covered subset: F1={kg_covered_f1:.3f}  "
+          f"n={kg_covered_count} ({kg_covered_count/len(y_true)*100:.1f}%)")
+    coverage_gap = (1 - verifiable_count / len(y_true)) * 100
+    print(f"\nKG Coverage Gap: {coverage_gap:.1f}% of samples were UNVERIFIABLE")
+    print(f"due to entity not found or KG incompleteness")
+    print(f"{'='*60}")
+
+    return {
+        "overall_f1":          overall_f1,
+        "overall_accuracy":    overall_acc,
+        "verifiable_f1":       verifiable_f1,
+        "verifiable_count":    verifiable_count,
+        "verifiable_pct":      round(verifiable_count / len(y_true) * 100, 2),
+        "kg_covered_f1":       kg_covered_f1,
+        "kg_covered_count":    kg_covered_count,
+        "kg_coverage_gap_pct": round(coverage_gap, 2)
+    }
+
+
+verifiable_results = compute_verifiable_subset_metrics(results_df)

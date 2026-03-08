@@ -1,0 +1,41 @@
+#TYPE:code
+# ==============================================================================
+# Cell 3: All imports in one cell
+# ==============================================================================
+
+import os
+import re
+import json
+import time
+import random
+import requests
+import warnings
+
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+from tqdm import tqdm
+
+import torch
+from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, pipeline
+from datasets import load_dataset
+from sklearn.metrics import (
+    f1_score, precision_score, recall_score,
+    accuracy_score, confusion_matrix,
+    roc_auc_score, classification_report
+)
+from sklearn.model_selection import train_test_split
+
+import spacy
+from SPARQLWrapper import SPARQLWrapper, JSON
+from statsmodels.stats.contingency_tables import mcnemar
+
+warnings.filterwarnings("ignore")
+
+print("All imports successful")
+print(f"  PyTorch:        {torch.__version__}")
+print(f"  CUDA available: {torch.cuda.is_available()}")
+if torch.cuda.is_available():
+    print(f"  GPU:            {torch.cuda.get_device_name(0)}")
+    print(f"  GPU Memory:     {torch.cuda.get_device_properties(0).total_mem / 1e9:.1f} GB")
